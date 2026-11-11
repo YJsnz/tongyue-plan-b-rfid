@@ -261,11 +261,11 @@ class CtcBookTracker:
                         labels.setdefault(toneless(choice), set()).add(label_id)
         return {key: sorted(value) for key, value in labels.items()}
 
-    def _stitch_pending(self, scores, start_seconds):
+    def _stitch_pending(self, scores, start_seconds, frame_rms=None):
         if self.pending_fragment is None or not len(scores):
             return None
         import numpy as np
-        previous_scores, previous_start = self.pending_fragment
+        previous_scores, previous_start, previous_rms = self.pending_fragment
         frame_seconds = self.acoustic.frame_seconds
         previous_end = previous_start + len(previous_scores) * frame_seconds
         gap_seconds = start_seconds - previous_end
@@ -281,14 +281,21 @@ class CtcBookTracker:
             silence = np.full((gap_frames, scores.shape[1]), -50.0, dtype=scores.dtype)
             silence[:, self.acoustic.blank_id] = 0.0
             scores = np.concatenate((previous_scores, silence, scores), axis=0)
+            combined_rms = (np.concatenate((previous_rms, np.zeros(gap_frames, dtype=np.float32), frame_rms))
+                            if previous_rms is not None and frame_rms is not None else None)
         else:
             scores = np.concatenate((previous_scores, scores), axis=0)
-        return scores, previous_start
+            combined_rms = (np.concatenate((previous_rms, frame_rms))
+                            if previous_rms is not None and frame_rms is not None else None)
+        return scores, previous_start, combined_rms
 
-    def _syllable_beam(self, scores, start_seconds, *, final=True, end_seconds=None):
+    def _syllable_beam(self, scores, start_seconds, *, final=True, end_seconds=None, frame_rms=None):
         if not self.syllable_nodes or not self.syllable_label_ids:
             return None
         import numpy as np
+        frame_rms_floor = getattr(self.acoustic, "frame_rms_floor", None)
+        if frame_rms is not None and len(frame_rms) != len(scores):
+            frame_rms = None
         beam_state = self.syllable_beam_state
         if beam_state is not None:
             processed = beam_state["processed"]
@@ -431,6 +438,8 @@ class CtcBookTracker:
         for frame, local_index in enumerate(path):
             if local_index < 0 or blank_frames[frame]:
                 continue
+            if frame_rms is not None and frame_rms_floor is not None and frame_rms[frame] < frame_rms_floor:
+                continue
             node = window[int(local_index)]
             labels = node["labels"]
             if not labels or np.max(scores[frame, labels]) < math.log(0.05):
@@ -493,7 +502,7 @@ class CtcBookTracker:
                     token = aligned_bytes["tokens"][label_index]
                     first_frame = begin + round(token["startSeconds"] / frame_seconds)
                     last_frame = begin + round(token["endSeconds"] / frame_seconds)
-                    token_frames = range(max(begin, first_frame), min(finish, last_frame))
+                    token_frames = range(max(begin, first_frame - 1), min(finish, last_frame + 1))
                     if (token["meanPosterior"] < 0.05 or not any(
                             int(np.argmax(scores[frame])) == source_labels[label_index] and
                             scores[frame, source_labels[label_index]] >= math.log(0.05)
@@ -501,6 +510,14 @@ class CtcBookTracker:
                         valid_group = False
                         break
                     pairs.extend((frame, source_labels[label_index]) for frame in token_frames)
+                if valid_group and frame_rms is not None and frame_rms_floor is not None:
+                    first_token = aligned_bytes["tokens"][label_start]
+                    last_token = aligned_bytes["tokens"][label_end - 1]
+                    first_frame = begin + math.floor(first_token["startSeconds"] / frame_seconds)
+                    last_frame = begin + math.ceil(last_token["endSeconds"] / frame_seconds)
+                    active_frames = range(max(begin, first_frame - 1), min(finish, last_frame + 1))
+                    if not any(frame_rms[frame] >= frame_rms_floor for frame in active_frames):
+                        valid_group = False
                 if not valid_group:
                     break
                 group_evidence[node_index] = pairs
@@ -562,42 +579,53 @@ class CtcBookTracker:
                      alignmentMode="syllable_beam", syllableBeamGap=margin,
                      observedSyllables=len(observed))
 
-    def locate(self, scores, start_seconds=0, *, final=True, end_seconds=None):
+    def locate(self, scores, start_seconds=0, *, final=True, end_seconds=None, frame_rms=None):
         try:
-            return self._locate_with_fragments(scores, start_seconds, final=final, end_seconds=end_seconds)
+            return self._locate_with_fragments(scores, start_seconds, final=final,
+                                               end_seconds=end_seconds, frame_rms=frame_rms)
         finally:
             if final:
                 self.syllable_beam_state = None
 
-    def _locate_with_fragments(self, scores, start_seconds=0, *, final=True, end_seconds=None):
-        stitched = self._stitch_pending(scores, start_seconds)
+    def _locate_with_fragments(self, scores, start_seconds=0, *, final=True, end_seconds=None, frame_rms=None):
+        stitched = self._stitch_pending(scores, start_seconds, frame_rms=frame_rms)
         if stitched is not None:
-            combined, combined_start = stitched
+            combined, combined_start, combined_rms = stitched
             if not final:
-                return self._locate_once(combined, combined_start, final=False, end_seconds=end_seconds)
+                return self._locate_once(combined, combined_start, final=False,
+                                         end_seconds=end_seconds, frame_rms=combined_rms)
             combined_text = readable(self.acoustic.decode_ids(
                 greedy_ids(combined, self.acoustic.blank_id)))
             if len(combined_text) < 4:
-                self.pending_fragment = (combined.copy(), combined_start)
-                return self._locate_once(combined, combined_start, final=True, end_seconds=end_seconds)
-            result = self._locate_once(combined, combined_start, final=True, end_seconds=end_seconds)
+                self.pending_fragment = (combined.copy(), combined_start,
+                                         combined_rms.copy() if combined_rms is not None else None)
+                return self._locate_once(combined, combined_start, final=True,
+                                         end_seconds=end_seconds, frame_rms=combined_rms)
+            result = self._locate_once(combined, combined_start, final=True,
+                                       end_seconds=end_seconds, frame_rms=combined_rms)
             self.pending_fragment = None
             if result["status"] != "uncertain":
                 return result
             # A short unrelated fragment must not prevent a clean new utterance
             # from matching on its own.
-            result = self._locate_once(scores, start_seconds, final=True, end_seconds=end_seconds)
+            result = self._locate_once(scores, start_seconds, final=True,
+                                       end_seconds=end_seconds, frame_rms=frame_rms)
             if result.get("reason") == "insufficient_context" and len(scores) <= MAX_FRAGMENT_STITCH_FRAMES:
-                self.pending_fragment = (scores.copy(), start_seconds)
+                self.pending_fragment = (scores.copy(), start_seconds,
+                                         frame_rms.copy() if frame_rms is not None else None)
             return result
 
-        result = self._locate_once(scores, start_seconds, final=final, end_seconds=end_seconds)
+        result = self._locate_once(scores, start_seconds, final=final,
+                                   end_seconds=end_seconds, frame_rms=frame_rms)
         if (final and result.get("reason") == "insufficient_context" and
                 len(scores) <= MAX_FRAGMENT_STITCH_FRAMES):
-            self.pending_fragment = (scores.copy(), start_seconds)
+            self.pending_fragment = (scores.copy(), start_seconds,
+                                     frame_rms.copy() if frame_rms is not None else None)
         return result
 
-    def _locate_once(self, scores, start_seconds=0, *, final=True, end_seconds=None):
+    def _locate_once(self, scores, start_seconds=0, *, final=True, end_seconds=None, frame_rms=None):
+        if frame_rms is not None and len(frame_rms) != len(scores):
+            frame_rms = None
         end = start_seconds + len(scores) * self.acoustic.frame_seconds
         end = end if end_seconds is None else min(end, end_seconds)
         old_segment = self.position[0] if self.position else None
@@ -674,7 +702,8 @@ class CtcBookTracker:
             elif ambiguous:
                 return uncertain("ambiguous_book_alignment")
         if not candidates:
-            aligned = self._syllable_beam(scores, start_seconds, final=final, end_seconds=end_seconds)
+            aligned = self._syllable_beam(scores, start_seconds, final=final,
+                                          end_seconds=end_seconds, frame_rms=frame_rms)
             if aligned is not None:
                 return aligned
             return uncertain("reference_mismatch")
@@ -693,13 +722,22 @@ class CtcBookTracker:
             return uncertain("weak_acoustics", acousticGap=aligned["acousticGap"])
         segment_index, record, begin, finish, offsets, mapping, edit_distance = candidates[0]
         character_times = []
+        frame_rms_floor = getattr(self.acoustic, "frame_rms_floor", None)
         for begin_token, end_token in character_spans:
             tokens = aligned["tokens"][begin_token:end_token]
+            if frame_rms is not None and frame_rms_floor is not None:
+                first_frame = max(0, math.floor(tokens[0]["startSeconds"] / self.acoustic.frame_seconds))
+                last_frame = min(len(frame_rms), math.ceil(tokens[-1]["endSeconds"] / self.acoustic.frame_seconds))
+                if not any(frame_rms[index] >= frame_rms_floor
+                           for index in range(max(0, first_frame - 1), min(len(frame_rms), last_frame + 1))):
+                    character_times.append(None)
+                    continue
             character_times.append({"startSeconds": tokens[0]["startSeconds"],
                                     "endSeconds": tokens[-1]["endSeconds"],
                                     "meanPosterior": sum(token["meanPosterior"] for token in tokens) / len(tokens)})
         by_offset = {offsets[reference_index]: character_times[query_index]
-                     for query_index, reference_index in enumerate(mapping) if reference_index is not None}
+                     for query_index, reference_index in enumerate(mapping)
+                     if reference_index is not None and character_times[query_index] is not None}
         covered = sorted(by_offset)
         if not covered:
             return uncertain("incomplete_word")

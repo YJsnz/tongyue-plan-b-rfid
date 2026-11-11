@@ -31,7 +31,8 @@ def ctc_events(pack, samples, acoustic, tracker=None):
     import numpy as np
     tracker = tracker if tracker is not None else CtcBookTracker(pack.text_index(), acoustic)
     stream = acoustic.new_stream()
-    pending, leading, pending_start, frame_index, trailing = [], [], 0, 0, 0
+    pending, pending_rms, leading, leading_rms = [], [], [], []
+    pending_start, frame_index, trailing = 0, 0, 0
     duration, last_partial = len(samples) / 16000, None
     blank = acoustic.blank_id
     for offset in range(0, len(samples), 1600):
@@ -40,15 +41,22 @@ def ctc_events(pack, samples, acoustic, tracker=None):
         for scores in chunk:
             if frame_index * acoustic.frame_seconds >= duration:
                 break
+            sample_start = round(frame_index * acoustic.frame_seconds * 16000)
+            sample_end = min(len(samples), round((frame_index + 1) * acoustic.frame_seconds * 16000))
+            frame_samples = samples[sample_start:sample_end]
+            frame_rms = float(np.sqrt(np.mean(frame_samples * frame_samples))) if len(frame_samples) else 0.0
             token = int(scores.argmax())
             if not pending:
                 if token == blank:
                     leading = (leading + [scores])[-2:]
+                    leading_rms = (leading_rms + [frame_rms])[-2:]
                     frame_index += 1
                     continue
                 pending_start = frame_index - len(leading)
                 pending, leading = leading, []
+                pending_rms, leading_rms = leading_rms, []
             pending.append(scores)
+            pending_rms.append(frame_rms)
             trailing = trailing + 1 if token == blank else 0
             frame_index += 1
             if trailing >= 17 or len(pending) >= 200:
@@ -58,17 +66,20 @@ def ctc_events(pack, samples, acoustic, tracker=None):
                                 start, min(frame_index * acoustic.frame_seconds, duration),
                                 reason="utterance_too_long", final=True)
                 else:
-                    yield tracker.locate(np.stack(pending), start, end_seconds=duration)
-                pending, trailing, last_partial = [], 0, None
+                    yield tracker.locate(np.stack(pending), start, end_seconds=duration,
+                                         frame_rms=np.asarray(pending_rms, dtype=np.float32))
+                pending, pending_rms, trailing, last_partial = [], [], 0, None
         if pending and len(chunk):
             found = tracker.locate(np.stack(pending), pending_start * acoustic.frame_seconds,
-                                   final=False, end_seconds=duration)
+                                   final=False, end_seconds=duration,
+                                   frame_rms=np.asarray(pending_rms, dtype=np.float32))
             key = (found["status"], found["segmentId"], found.get("wordIndex"), found["reason"])
             if key != last_partial:
                 yield found
                 last_partial = key
     if pending:
-        yield tracker.locate(np.stack(pending), pending_start * acoustic.frame_seconds, end_seconds=duration)
+        yield tracker.locate(np.stack(pending), pending_start * acoustic.frame_seconds, end_seconds=duration,
+                             frame_rms=np.asarray(pending_rms, dtype=np.float32))
 
 
 def main():

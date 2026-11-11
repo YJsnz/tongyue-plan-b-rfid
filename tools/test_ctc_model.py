@@ -25,25 +25,39 @@ class RealCtcModelTests(unittest.TestCase):
     def samples(self, name):
         return self.read_wav(self.demo / "fixtures" / name)
 
+    def scores_and_rms(self, samples):
+        stream, chunks = self.acoustic.new_stream(), []
+        for offset in range(0, len(samples), 1600):
+            chunks.append(stream.accept(samples[offset:offset + 1600], final=offset + 1600 >= len(samples)))
+        scores = self.np.concatenate(chunks)[:int(self.np.ceil(len(samples) / 640))]
+        rms = self.np.asarray([
+            self.np.sqrt(self.np.mean(samples[index * 640:min(len(samples), (index + 1) * 640)] ** 2))
+            for index in range(len(scores))
+        ], dtype=self.np.float32)
+        return scores, rms
+
     def test_actual_streaming_word_times_repeat_foreign_question_and_silence(self):
         for filename, expected in (
-                ("read-s1.wav", [("matched", "s1")]),
-                ("read-s2.wav", [("matched", "s2")]),
-                ("read-repeat.wav", [("matched", "s1"), ("repeated", "s1"), ("matched", "s2")]),
-                ("question-unknown.wav", [("uncertain", None)]), ("silence.wav", [])):
+                ("read-s1.wav", [("matched", "s1", [0, 1, 2, 3, 5, 6, 7, 8])]),
+                ("read-s2.wav", [("matched", "s2", list(range(10)))]),
+                ("read-repeat.wav", [("matched", "s1", [0, 1, 2, 3, 5, 6, 7, 8]),
+                                     ("repeated", "s1", [0, 1, 2, 3, 5, 6, 7, 8]),
+                                     ("matched", "s2", list(range(10)))]),
+                ("question-unknown.wav", [("uncertain", None, [])]), ("silence.wav", [])):
             with self.subTest(recording=filename):
                 samples = self.samples(filename)
                 events = list(ctc_events(self.pack, samples, self.acoustic))
                 completed = [item for item in events if item["final"]]
-                self.assertEqual([(item["status"], item["segmentId"]) for item in completed], expected)
+                self.assertEqual([(item["status"], item["segmentId"],
+                                   [word["wordIndex"] for word in item["words"]])
+                                  for item in completed], expected)
                 for item in completed:
                     if item["status"] == "uncertain":
                         self.assertEqual(item["reason"], "reference_mismatch")
                         self.assertEqual(item["words"], [])
                         continue
                     record = next(record for record in self.pack.text_index().segments if record["segmentId"] == item["segmentId"])
-                    self.assertEqual(len(item["words"]), len(record["words"]))
-                    self.assertEqual(item["wordIndex"], len(record["words"]) - 1)
+                    self.assertEqual(item["wordIndex"], item["words"][-1]["wordIndex"])
                     previous = 0
                     for word in item["words"]:
                         self.assertEqual(word["text"], record["text"][word["textStart"]:word["textEnd"]])
@@ -54,16 +68,13 @@ class RealCtcModelTests(unittest.TestCase):
 
     def test_real_syllable_beam_tracks_exact_words_after_an_anchor(self):
         samples = self.samples("read-s2.wav")
-        stream, chunks = self.acoustic.new_stream(), []
-        for offset in range(0, len(samples), 1600):
-            chunks.append(stream.accept(samples[offset:offset + 1600], final=offset + 1600 >= len(samples)))
-        scores = self.np.concatenate(chunks)[:int(self.np.ceil(len(samples) / 640))]
+        scores, frame_rms = self.scores_and_rms(samples)
 
         index = self.pack.text_index()
         tracker = CtcBookTracker(index, self.acoustic)
         first = next(record for record in index.segments if record["segmentId"] == "s1")
         tracker.final_position = ("s1", len(first["words"]) - 1)
-        result = tracker._syllable_beam(scores, 0.0)
+        result = tracker._syllable_beam(scores, 0.0, frame_rms=frame_rms)
 
         self.assertEqual((result["status"], result["segmentId"], result["wordIndex"]),
                          ("matched", "s2", 9))
@@ -78,6 +89,31 @@ class RealCtcModelTests(unittest.TestCase):
             self.assertLessEqual(word["endSeconds"], len(samples) / 16000)
             self.assertGreaterEqual(word["meanPosterior"], 0.05)
             previous_end = word["endSeconds"]
+
+    def test_muted_word_is_not_confirmed_by_ctc_or_syllable_beam(self):
+        samples = self.samples("read-s2.wav")
+        muted = samples.copy()
+        muted[int(1.18 * 16000):int(1.54 * 16000)] = 0
+        index = self.pack.text_index()
+        first = next(record for record in index.segments if record["segmentId"] == "s1")
+
+        tracker = CtcBookTracker(index, self.acoustic)
+        tracker.position = ("s1", len(first["words"]) - 1)
+        tracker.final_position = tracker.position
+        events = list(ctc_events(self.pack, muted, self.acoustic, tracker))
+        completed = [item for item in events if item["final"]]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual((completed[0]["status"], completed[0]["segmentId"]), ("matched", "s2"))
+        self.assertNotIn(2, [word["wordIndex"] for word in completed[0]["words"]])
+
+        scores, frame_rms = self.scores_and_rms(muted)
+        tracker = CtcBookTracker(index, self.acoustic)
+        tracker.position = ("s1", len(first["words"]) - 1)
+        tracker.final_position = tracker.position
+        beam_result = tracker._syllable_beam(scores, 0.0, frame_rms=frame_rms)
+        self.assertNotIn(2, [word["wordIndex"] for word in beam_result["words"]])
+        if beam_result["status"] == "uncertain":
+            self.assertEqual(beam_result["words"], [])
 
     def test_feature_frontend_and_transcript_agree_with_official_runtime(self):
         # Optional reference-only package: pip install sherpa-onnx==2.0.1.
@@ -109,7 +145,7 @@ class RealCtcModelTests(unittest.TestCase):
             reader.save({**reader.state, "bindings": {"0004A12B": "bear-friends"}})
             reader.tap("0004A12B")
             reader.locate("read-s1.wav")
-            self.assertEqual(reader.active["wordIndex"], 9)
+            self.assertEqual(reader.active["wordIndex"], 8)
             self.assertEqual(reader.ask("小熊为什么带伞？")["status"], "answered")
             reader.locate("read-s1.wav")
             self.assertEqual(reader.active["traceStats"]["repeated"], 1)
@@ -117,10 +153,10 @@ class RealCtcModelTests(unittest.TestCase):
             self.assertEqual(reader.ask("小熊为什么带伞？")["status"], "needsPositionConfirmation")
             session = reader.finish(None)
             self.assertTrue(session["positionUncertain"])
-            self.assertEqual(session["lastWordIndex"], 9)
+            self.assertEqual(session["lastWordIndex"], 8)
             self.assertEqual([item["status"] for item in session["trajectory"]],
                              ["selected", "matched", "repeated", "uncertain"])
-            self.assertEqual(session["trajectory"][1]["text"], "了")
+            self.assertEqual(session["trajectory"][1]["text"], "下雨")
             self.assertEqual(Reader(state, 30).sessions("")["items"], [session])
 
     def test_opt_in_free_voice_question_uses_page_evidence_and_never_saves_raw_transcript(self):

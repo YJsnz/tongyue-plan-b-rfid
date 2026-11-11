@@ -38,6 +38,8 @@ def read_pcm_wav(path):
 
 class ZipformerCtc:
     frame_seconds = 0.04
+    # PCM16 digital zero is below this; keep the gate conservative for quiet speech.
+    frame_rms_floor = 0.000001
     blank_id = 0
 
     def __init__(self, directory):

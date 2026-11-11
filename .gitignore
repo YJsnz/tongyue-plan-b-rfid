@@ -3,6 +3,7 @@
 .hvigor/
 **/.hvigor/
 **/.preview/
+__pycache__/
 **/build/
 **/oh_modules/
 **/node_modules/

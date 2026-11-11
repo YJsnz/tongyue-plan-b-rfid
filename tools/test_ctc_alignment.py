@@ -296,6 +296,65 @@ class CtcAlignmentTests(unittest.TestCase):
         self.assertEqual([(word["text"], word["textStart"], word["textEnd"]) for word in result["words"]],
                          [("小伞", 0, 2), ("小伞", 2, 4)])
 
+    def test_syllable_beam_uses_label_ids_and_only_confirms_exact_source_words(self):
+        class SyllableIndex:
+            def __init__(self):
+                self.segments = [
+                    {"segmentId": "s1", "text": "甲乙丙丁", "words": [(i, i + 1, 0) for i in range(4)]},
+                    {"segmentId": "s2", "text": "小熊把伞", "words": [(0, 2, 0), (2, 3, 0), (3, 4, 0)]},
+                ]
+                self.pronunciations = {
+                    "s1": ["jia", "yi", "bing", "ding"],
+                    "s2": ["xiao", "xiong", "ba", "san"],
+                }
+
+            def tokens(self, segment_id):
+                record = next(item for item in self.segments if item["segmentId"] == segment_id)
+                pronunciations = self.pronunciations[segment_id]
+                result, token_index = [], 0
+                for word_index, (start, end, _) in enumerate(record["words"]):
+                    for offset in range(start, end):
+                        result.append({"segmentId": segment_id, "tokenIndex": token_index,
+                                       "wordIndex": word_index, "textStart": offset,
+                                       "textEnd": offset + 1, "pinyin": pronunciations[offset]})
+                        token_index += 1
+                return result
+
+        class SyllableAcoustic:
+            blank_id, frame_seconds = 0, 0.04
+
+            def __init__(self):
+                self.token_ids = {"甲": 1, "乙": 2, "丙": 3, "丁": 4,
+                                  "小": 10, "筱": 11, "熊": 20, "把": 30, "伞": 40}
+                self.syllable_label_ids = {"jia": [41, 1], "yi": [42, 2],
+                                           "bing": [43, 3], "ding": [44, 4],
+                                           "xiao": [11, 10], "xiong": [21, 20],
+                                           "ba": [31, 30], "san": [45, 40]}
+
+            def encode_text(self, text):
+                return [self.token_ids[char] for char in text]
+
+        def scores_for(labels):
+            values = np.full((len(labels), 46), 0.001, dtype=np.float32)
+            values[np.arange(len(labels)), labels] = 0.99
+            values /= values.sum(axis=1, keepdims=True)
+            return np.log(values)
+
+        index, acoustic = SyllableIndex(), SyllableAcoustic()
+        tracker = CtcBookTracker(index, acoustic)
+        tracker.final_position = ("s1", 3)
+        exact = tracker._syllable_beam(scores_for([10, 10, 20, 20, 30, 30, 40, 40]), 0.0)
+        self.assertEqual((exact["status"], exact["segmentId"], exact["wordIndex"]),
+                         ("matched", "s2", 2))
+        self.assertEqual([word["text"] for word in exact["words"]], ["小熊", "把", "伞"])
+        self.assertEqual(tracker.final_position, ("s2", 2))
+
+        tracker.final_position = ("s1", 3)
+        homophone = tracker._syllable_beam(scores_for([11, 11, 20, 20, 30, 30, 40, 40]), 0.0)
+        self.assertEqual(homophone["wordIndex"], 2)
+        self.assertEqual([word["text"] for word in homophone["words"]], ["把", "伞"])
+        self.assertEqual([word["wordIndex"] for word in homophone["words"]], [1, 2])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from ctc_alignment import greedy_ids, readable
+from ctc_alignment import CtcBookTracker, greedy_ids, readable
 from reading_probe import ctc_events
 from storypack import StoryPack
 
@@ -51,6 +51,27 @@ class RealCtcModelTests(unittest.TestCase):
                         self.assertLess(word["startSeconds"], word["endSeconds"])
                         self.assertLessEqual(word["endSeconds"], len(samples) / 16000)
                         previous = word["endSeconds"]
+
+    def test_real_syllable_beam_tracks_exact_words_after_an_anchor(self):
+        samples = self.samples("read-s2.wav")
+        stream, chunks = self.acoustic.new_stream(), []
+        for offset in range(0, len(samples), 1600):
+            chunks.append(stream.accept(samples[offset:offset + 1600], final=offset + 1600 >= len(samples)))
+        scores = self.np.concatenate(chunks)[:int(self.np.ceil(len(samples) / 640))]
+
+        index = self.pack.text_index()
+        tracker = CtcBookTracker(index, self.acoustic)
+        first = next(record for record in index.segments if record["segmentId"] == "s1")
+        tracker.final_position = ("s1", len(first["words"]) - 1)
+        result = tracker._syllable_beam(scores, 0.0)
+
+        self.assertEqual((result["status"], result["segmentId"], result["wordIndex"]),
+                         ("matched", "s2", 8))
+        self.assertEqual([word["text"] for word in result["words"]],
+                         ["小熊", "把", "递给", "因为", "没有", "带"])
+        record = next(record for record in index.segments if record["segmentId"] == result["segmentId"])
+        self.assertTrue(all(word["text"] == record["text"][word["textStart"]:word["textEnd"]]
+                            for word in result["words"]))
 
     def test_feature_frontend_and_transcript_agree_with_official_runtime(self):
         # Optional reference-only package: pip install sherpa-onnx==2.0.1.

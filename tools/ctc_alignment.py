@@ -6,15 +6,25 @@ a pronunciation assessment and never confirms substituted source characters.
 """
 
 import math
+import re
 
 MAX_FRAGMENT_STITCH_GAP_SECONDS = 1.5
 MAX_FRAGMENT_STITCH_FRAMES = 200
 MIN_BOOK_DP_CHARS = 16
 MAX_BOOK_DP_CANDIDATES = 16
+SYLLABLE_BEAM_WIDTH = 32
+SYLLABLE_BEAM_RADIUS = 40
+MIN_SYLLABLE_BEAM_HITS = 4
+MIN_SYLLABLE_BEAM_MARGIN = 0.75
+BLANK_FREEZE_PROBABILITY = 0.9
 
 
 def readable(text):
     return "".join(char for char in text if char.isalnum())
+
+
+def toneless(syllable):
+    return re.sub(r"[1-5]$", "", syllable)
 
 
 def greedy_ids(scores, blank=0):
@@ -194,6 +204,9 @@ class CtcBookTracker:
         self.final_position = None
         self.pending_fragment = None
         self.references = []
+        self.syllable_nodes = []
+        self.syllable_words = {}
+        self.syllable_label_ids = self._syllable_label_map(acoustic)
         for segment_index, record in enumerate(text_index.segments):
             offsets = [index for index, char in enumerate(record["text"]) if char.isalnum()]
             normalized = readable(record["text"])
@@ -201,6 +214,45 @@ class CtcBookTracker:
             # a book whose later chapters cannot be represented by this model.
             acoustic.encode_text(normalized)
             self.references.append((segment_index, record, normalized, offsets))
+            if hasattr(text_index, "tokens"):
+                for token in text_index.tokens(record["segmentId"]):
+                    pinyin = toneless(token["pinyin"])
+                    text_start, text_end = token["textStart"], token["textEnd"]
+                    source_char = record["text"][text_start:text_end]
+                    token_ids = getattr(acoustic, "token_ids", getattr(acoustic, "ids", {}))
+                    node_index = len(self.syllable_nodes)
+                    key = (segment_index, token["wordIndex"])
+                    node = {"segmentIndex": segment_index, "segmentId": record["segmentId"],
+                            "wordIndex": token["wordIndex"], "textStart": text_start, "textEnd": text_end,
+                            "pinyin": pinyin, "labels": self.syllable_label_ids.get(pinyin, []),
+                            "sourceLabel": token_ids.get(source_char) if len(source_char) == 1 else None,
+                            "wordStart": key not in self.syllable_words}
+                    self.syllable_nodes.append(node)
+                    self.syllable_words.setdefault(key, []).append(node_index)
+
+    @staticmethod
+    def _syllable_label_map(acoustic):
+        supplied = getattr(acoustic, "syllable_label_ids", None)
+        if isinstance(supplied, dict):
+            return {key: list(value) for key, value in supplied.items() if isinstance(value, (list, tuple))}
+        tokens = getattr(acoustic, "tokens", None)
+        if not isinstance(tokens, dict):
+            return {}
+        try:
+            from pypinyin import Style, pinyin
+        except ImportError:
+            return {}
+        labels = {}
+        for label_id, token in tokens.items():
+            if (not isinstance(token, str) or len(token) != 1 or
+                    not ("\u3400" <= token <= "\u9fff" or "\uf900" <= token <= "\ufaff")):
+                continue
+            for choices in pinyin(token, style=Style.TONE3, heteronym=True,
+                                  neutral_tone_with_five=True, errors=lambda value: [value]):
+                for choice in choices:
+                    if re.fullmatch(r"[a-zê]+[1-5]", choice):
+                        labels.setdefault(toneless(choice), set()).add(label_id)
+        return {key: sorted(value) for key, value in labels.items()}
 
     def _stitch_pending(self, scores, start_seconds):
         if self.pending_fragment is None or not len(scores):
@@ -225,6 +277,183 @@ class CtcBookTracker:
         else:
             scores = np.concatenate((previous_scores, scores), axis=0)
         return scores, previous_start
+
+    def _syllable_beam(self, scores, start_seconds, *, final=True, end_seconds=None):
+        if not self.syllable_nodes or not self.syllable_label_ids:
+            return None
+        anchor = self.final_position or self.position
+        if anchor is None:
+            return None
+        anchor_node = max((index for index, node in enumerate(self.syllable_nodes)
+                           if node["segmentId"] == anchor[0] and node["wordIndex"] == anchor[1]), default=None)
+        if anchor_node is None or len(scores) < MIN_SYLLABLE_BEAM_HITS:
+            return None
+        import numpy as np
+        frame_seconds = self.acoustic.frame_seconds
+        end = start_seconds + len(scores) * frame_seconds
+        end = end if end_seconds is None else min(end, end_seconds)
+        left = max(0, anchor_node - SYLLABLE_BEAM_RADIUS)
+        right = min(len(self.syllable_nodes), anchor_node + SYLLABLE_BEAM_RADIUS + 1)
+        window = self.syllable_nodes[left:right]
+        width = len(window)
+        start_states = [index for index, node in enumerate(window)
+                        if node["wordStart"] and left + index <= anchor_node]
+        if anchor_node + 1 < right:
+            start_states.append(anchor_node + 1 - left)
+        start_states = sorted(set(start_states))
+        if not start_states or width < MIN_SYLLABLE_BEAM_HITS:
+            return None
+
+        emissions = np.full((len(scores), width), -12.0, dtype=np.float32)
+        for index, node in enumerate(window):
+            labels = node["labels"]
+            if labels:
+                emissions[:, index] = np.max(scores[:, labels], axis=1)
+        blank_probability = np.exp(np.clip(scores[:, self.acoustic.blank_id], -60, 0))
+        blank_frames = blank_probability >= BLANK_FREEZE_PROBABILITY
+        history = np.full((len(scores), width), -2, dtype=np.int16)
+        previous = np.full(width, -np.inf, dtype=np.float64)
+        first_emission = np.where(blank_frames[0], 0.0, emissions[0])
+        previous[start_states] = first_emission[start_states]
+        history[0, start_states] = -1
+
+        def prune(values):
+            active = np.flatnonzero(np.isfinite(values))
+            if len(active) > SYLLABLE_BEAM_WIDTH:
+                keep = active[np.argpartition(values[active], -SYLLABLE_BEAM_WIDTH)[-SYLLABLE_BEAM_WIDTH:]]
+                removed = np.ones(len(values), dtype=bool)
+                removed[keep] = False
+                values[removed] = -np.inf
+            return values
+
+        previous = prune(previous)
+        blank_run = 1 if blank_frames[0] else 0
+        for frame in range(1, len(scores)):
+            blank_run = blank_run + 1 if blank_frames[frame] else 0
+            current = np.full(width, -np.inf, dtype=np.float64)
+            for target in range(width):
+                options = [(target, -0.2)]
+                if blank_run >= 2:
+                    pass  # Sustained silence freezes the beam position.
+                elif blank_run == 1:
+                    if (target > 0 and window[target - 1]["pinyin"] == window[target]["pinyin"]):
+                        options.append((target - 1, -1.5))
+                else:
+                    if target > 0:
+                        options.append((target - 1, -0.45))
+                    if target > 1:
+                        options.append((target - 2, -2.5))
+                    if target + 1 < width:
+                        options.append((target + 1, -2.5))
+                best_value, best_source = -np.inf, -1
+                for source, penalty in options:
+                    value = previous[source] + penalty
+                    if value > best_value:
+                        best_value, best_source = value, source
+                if best_source >= 0:
+                    current[target] = best_value + (0.0 if blank_frames[frame] else emissions[frame, target])
+                    history[frame, target] = best_source
+            previous = prune(current)
+            if not np.isfinite(previous).any():
+                return None
+
+        scores_by_word = {}
+        for index, value in enumerate(previous):
+            if not np.isfinite(value):
+                continue
+            node = window[index]
+            key = (node["segmentIndex"], node["wordIndex"])
+            word_end = self.syllable_words[key][-1] - left
+            if index == word_end:
+                scores_by_word[key] = float(value)
+        ranked = sorted(scores_by_word.items(), key=lambda item: item[1], reverse=True)
+        if not ranked:
+            return None
+        best_key, best_score = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else -np.inf
+        margin = best_score - second_score
+        local_end = self.syllable_words[best_key][-1] - left
+        if not 0 <= local_end < width or not np.isfinite(previous[local_end]):
+            return None
+        if local_end is None:
+            return None
+        path = np.full(len(scores), -1, dtype=np.int16)
+        state = local_end
+        for frame in range(len(scores) - 1, -1, -1):
+            if state < 0:
+                break
+            path[frame] = state
+            state = int(history[frame, state])
+
+        observed = set()
+        exact_frames = {}
+        for frame, local_index in enumerate(path):
+            if local_index < 0 or blank_frames[frame]:
+                continue
+            node = window[int(local_index)]
+            labels = node["labels"]
+            if not labels or emissions[frame, local_index] < math.log(0.05):
+                continue
+            node_index = left + int(local_index)
+            observed.add(node_index)
+            source_label = node["sourceLabel"]
+            if (source_label is not None and source_label in labels and
+                    labels[int(np.argmax(scores[frame, labels]))] == source_label and
+                    scores[frame, source_label] >= math.log(0.05)):
+                exact_frames.setdefault(node_index, []).append(frame)
+        if len(observed) < MIN_SYLLABLE_BEAM_HITS:
+            return None
+        if margin < MIN_SYLLABLE_BEAM_MARGIN:
+            return event("ctc", "uncertain", anchor[0], start_seconds, end,
+                         reason="ambiguous_syllable_alignment", final=final,
+                         wordIndex=anchor[1], syllableBeamGap=margin)
+
+        segment_index = best_key[0]
+        record = self.references[segment_index][1]
+        words = []
+        for (word_segment, word_index), node_indices in sorted(self.syllable_words.items()):
+            if (word_segment != segment_index or word_index > best_key[1] or
+                    any(index not in observed or index not in exact_frames for index in node_indices)):
+                continue
+            start_frame = min(frame for index in node_indices for frame in exact_frames[index])
+            end_frame = max(frame for index in node_indices for frame in exact_frames[index])
+            text_start, text_end, _ = record["words"][word_index]
+            word_start_seconds = start_seconds + start_frame * frame_seconds
+            word_end_seconds = start_seconds + (end_frame + 1) * frame_seconds
+            if word_end_seconds > end + 0.000001:
+                continue
+            words.append({"wordIndex": word_index, "textStart": text_start, "textEnd": text_end,
+                          "text": record["text"][text_start:text_end],
+                          "startSeconds": word_start_seconds, "endSeconds": word_end_seconds,
+                          "meanPosterior": float(np.mean([
+                              np.exp(scores[frame, self.syllable_nodes[index]["sourceLabel"]])
+                              for index in node_indices for frame in exact_frames[index]]))})
+        if not words:
+            return event("ctc", "uncertain", anchor[0], start_seconds, end,
+                         reason="incomplete_syllable_word", final=final,
+                         wordIndex=anchor[1], syllableBeamGap=margin,
+                         candidateSegmentId=record["segmentId"], candidateWordIndex=best_key[1],
+                         observedSyllables=len(observed), exactSyllables=len(exact_frames))
+        next_position = (record["segmentId"], words[-1]["wordIndex"])
+        status = "matched"
+        if self.final_position:
+            final_segment, final_word = self.final_position
+            previous_segment = next(index for index, item, _, _ in self.references
+                                    if item["segmentId"] == final_segment)
+            if next_position[0] == final_segment and next_position[1] <= final_word:
+                status = "repeated"
+            elif segment_index not in (previous_segment, previous_segment + 1):
+                status = "relocated"
+            elif segment_index == previous_segment and words[0]["wordIndex"] > final_word + 1:
+                status = "relocated"
+        self.position = next_position
+        if final:
+            self.final_position = next_position
+        return event("ctc", status, record["segmentId"], start_seconds, end, words=words,
+                     wordIndex=next_position[1], textStart=words[0]["textStart"],
+                     textEnd=words[-1]["textEnd"], final=final,
+                     alignmentMode="syllable_beam", syllableBeamGap=margin,
+                     observedSyllables=len(observed))
 
     def locate(self, scores, start_seconds=0, *, final=True, end_seconds=None):
         stitched = self._stitch_pending(scores, start_seconds)
@@ -331,6 +560,9 @@ class CtcBookTracker:
             elif ambiguous:
                 return uncertain("ambiguous_book_alignment")
         if not candidates:
+            aligned = self._syllable_beam(scores, start_seconds, final=final, end_seconds=end_seconds)
+            if aligned is not None:
+                return aligned
             return uncertain("reference_mismatch")
         try:
             if hasattr(self.acoustic, "alignment_tokens"):

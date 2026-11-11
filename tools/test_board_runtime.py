@@ -181,10 +181,10 @@ class BoardRuntimeIntegrationTests(unittest.TestCase):
         self.archive = self.root / "test-book.tar.gz"
         export(StoryPack(self.root / "authored", "test-book"), self.archive)
 
-    def configure_audio(self, reading, recording="s2.wav"):
+    def configure_audio(self, reading, recording="s2.wav", question="q2.wav"):
         temporary = self.root / "audio.tmp"
         write_json(temporary, {"reading": str(self.root / reading) if reading else None,
-                              "recording": str(self.root / recording), "question": str(self.root / "q2.wav")})
+                              "recording": str(self.root / recording), "question": str(self.root / question)})
         temporary.replace(self.root / "audio.json")
 
     def make_audio_programs(self):
@@ -363,6 +363,8 @@ log('end')
         self.key(28)
         answer = self.wait_event(lambda event: event.get("status") == "answered", after=mark)
         self.assertEqual(answer["segmentId"], "s2")
+        self.assertGreaterEqual(answer["captureToDecisionMs"], 0)
+        self.assertGreaterEqual(answer["captureToPlaybackDispatchMs"], answer["captureToDecisionMs"])
         self.wait_event(lambda event: event.get("audio") == "listening", after=self.events.index(answer) + 1)
         mark = len(self.events)
         self.key(1)
@@ -406,6 +408,13 @@ log('end')
         self.configure_audio(None)
         self.console("select s2")
         self.wait_event(lambda event: event.get("segmentId") == "s2" and "text" in event)
+        self.configure_audio(None, question="q1.wav")
+        mark = len(self.events)
+        self.console("ask-voice 2")
+        wrong_voice_position = self.wait_event(lambda event: event.get("status") == "unsupported", after=mark)
+        self.assertNotIn("evidence", wrong_voice_position)
+        self.assertNotIn("audio", wrong_voice_position)
+        self.configure_audio(None)
         mark = len(self.events)
         self.console("ask 它为什么带伞？")
         wrong_position = self.wait_event(lambda event: event.get("status") == "unsupported", after=mark)

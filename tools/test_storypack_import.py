@@ -133,6 +133,33 @@ class StoryPackImportTests(unittest.TestCase):
         self.assertEqual(self.request("/v1/reading-sessions?after=" + batch["nextCursor"], method="GET")[1]["items"], [])
         self.assertEqual(self.request("/sim/tap", {"tagUid": "0004A12B"})[1]["status"], "started")
 
+    def test_position_reviews_sync_separately_and_survive_reader_restart(self):
+        event_id = "0123456789abcdef0123456789abcdef"
+        session = {"sessionId": "review-session", "trajectory": [{"eventId": event_id}]}
+        self.server.reader.save({**self.server.reader.state, "sessions": [session]})
+        path = f"/v1/position-reviews/{session['sessionId']}/{event_id}"
+        self.assertEqual(self.request("/v1/position-reviews", method="GET"), (200, {"items": []}))
+
+        first = {"status": "needs_review", "note": "再和孩子核对", "updatedAtMs": 1000}
+        saved = self.request(path, first, method="PUT")
+        expected = {"deviceId": self.server.reader.state["deviceId"], "sessionId": "review-session",
+                    "eventId": event_id, **first}
+        self.assertEqual(saved, (200, expected))
+        stale = {"status": "confirmed", "note": "旧设备上的状态", "updatedAtMs": 900}
+        self.assertEqual(self.request(path, stale, method="PUT"), (200, expected))
+
+        current = {"status": "position_mismatch", "note": "", "updatedAtMs": 2000}
+        expected = {**expected, **current}
+        self.assertEqual(self.request(path, current, method="PUT"), (200, expected))
+        self.assertEqual(self.request("/v1/position-reviews", method="GET"), (200, {"items": [expected]}))
+        self.assertEqual(self.request(f"/v1/position-reviews/{session['sessionId']}/" + "f" * 32,
+                                      current, method="PUT"), (404, {"code": "POSITION_TRACE_NOT_FOUND"}))
+        invalid = {**current, "status": "guessed"}
+        self.assertEqual(self.request(path, invalid, method="PUT"), (400, {"code": "INVALID_POSITION_REVIEW"}))
+
+        self.server.reader = Reader(self.root / "state.json", 30, self.packs)
+        self.assertEqual(self.request("/v1/position-reviews", method="GET"), (200, {"items": [expected]}))
+
     def test_retry_is_idempotent_and_conflict_keeps_old_book(self):
         self.assertEqual(self.upload()[0], 200)
         self.assertTrue(self.upload()[1]["alreadyInstalled"])

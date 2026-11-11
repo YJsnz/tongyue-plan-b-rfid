@@ -29,14 +29,16 @@
 | 查询扫描结果 | `GET /v1/scans/{scanId}` | 返回 `waiting`、`detected` 或 `expired`。检测成功时返回 `tagUid`，以保留前导零的完整大写十六进制字符串传输。 |
 | 绑定标签 | `PUT /v1/book-bindings/{tagUid}` | 请求包含 `scanId`、`bookId`。板端校验扫描和 UID 对应、知识包可用后持久化。重复提交同一个 UID 与绘本返回成功。若 UID 已属于另一本书，返回冲突并保留原绑定。 |
 | 拉取已结束会话 | `GET /v1/reading-sessions?after={cursor}&limit=8` | 返回按板端持久化顺序排列的 `items`、不透明的 `nextCursor` 和 `hasMore`。`limit` 支持 1–8，旧请求可以省略。手机按 `(deviceId, sessionId)` 更新记录，全部页面成功保存后再推进游标。 |
+| 拉取位置复核 | `GET /v1/position-reviews` | 返回此阅读器上最多 512 条家长复核。手机只在家长点击「同步阅读记录」时拉取并合并。 |
+| 保存位置复核 | `PUT /v1/position-reviews/{sessionId}/{eventId}` | 请求包含 `status`、`note` 和 `updatedAtMs`。板端验证会话和轨迹点确实存在，状态只能为 `needs_review`、`position_mismatch` 或 `confirmed`，备注最多 256 字。每次修改保留一条最新记录；时间较旧或相同的写入返回板端已有版本，不覆盖它。 |
 
 接口返回可区分的错误码，至少包括 `SCAN_EXPIRED`、`TAG_ALREADY_BOUND`、`PACK_NOT_FOUND`、`PACK_INVALID`。客户端请求超时后保留上次已确认的绑定或历史数据，并允许重试。解绑和重新分配标签需要单独确认，首轮通过板端调试操作恢复测试环境。
 
-板端状态文件应放在本地持久文件系统中，并由单个阅读器进程持有。保存时先写入并同步同目录临时文件，再原子替换状态文件。在 Linux 上还会同步父目录，成功后才确认绑定或结束会话。替换前的错误返回 `STORAGE_UNAVAILABLE`，可在修复存储后重试。若替换后的目录同步失败，返回 `STORAGE_RESTART_REQUIRED`，检查文件系统后重启阅读器并核对原记录。现有 JSON 状态直接读取，损坏的文件不会被自动覆盖。[Linux `fsync` 说明](https://www.man7.org/linux/man-pages/man2/fsync.2.html)
+板端状态文件应放在本地持久文件系统中，并由单个阅读器进程持有。保存时先写入并同步同目录临时文件，再原子替换状态文件。在 Linux 上还会同步父目录，成功后才确认绑定或结束会话；位置复核也使用相同的原子保存路径。替换前的错误返回 `STORAGE_UNAVAILABLE`，可在修复存储后重试。若替换后的目录同步失败，返回 `STORAGE_RESTART_REQUIRED`，检查文件系统后重启阅读器并核对原记录。现有 JSON 状态直接读取，损坏的文件不会被自动覆盖。[Linux `fsync` 说明](https://www.man7.org/linux/man-pages/man2/fsync.2.html)
 
 最小会话字段为 `sessionId`、`bookId`、`packVersion`、`endedAtMs`、`durationMs`、`lastSegmentId`、`positionSource`。`sessionId` 在板端持久化且重启后不复用。时长用单调时钟计算。板端没有可靠的系统时钟时，加 `--no-trusted-clock`，让 `endedAtMs` 返回 `null`。手机保存并单独显示同步时间，未知阅读日期的记录不计入日历统计。手动选段用 `positionSource: manual`，自动定位用 `audio`。同步数据只包含摘要，原始音频默认不保存、不传输。
 
-新会话可带 `trajectory`，最多保留最近 128 个定位点；超出的数量记入 `trajectoryDropped`。每个定位点含唯一 `eventId`、相对会话开始的 `offsetMs`、`segmentId`、定位来源和状态。来源为 `manual` 时状态是 `selected`；MFCC/CTC 可记录 `matched`、`repeated`、`relocated` 或 `uncertain`。CTC 点还可带 StoryPack 原词界上的词索引、字符偏移和词文本。`traceStats` 保存重读、重定位、不确定计数，`positionUncertain` 和 `lastWordIndex` 表示会话结束时的位置状态。板端目前记录句段级 MFCC 轨迹，词位级 CTC 轨迹由电脑模拟器产生。家长端的复核记录只保存在本机缓存，按设备、会话和定位点关联；它不会改写原始定位点，也不会回传板端。轨迹不含音频或原始语音识别文本。
+新会话可带 `trajectory`，最多保留最近 128 个定位点；超出的数量记入 `trajectoryDropped`。每个定位点含唯一 `eventId`、相对会话开始的 `offsetMs`、`segmentId`、定位来源和状态。来源为 `manual` 时状态是 `selected`；MFCC/CTC 可记录 `matched`、`repeated`、`relocated` 或 `uncertain`。CTC 点还可带 StoryPack 原词界上的词索引、字符偏移和词文本。`traceStats` 保存重读、重定位、不确定计数，`positionUncertain` 和 `lastWordIndex` 表示会话结束时的位置状态。板端目前记录句段级 MFCC 轨迹，词位级 CTC 轨迹由电脑模拟器产生。家长端复核按设备、会话和定位点关联，独立于原始轨迹；原始轨迹不会被家长标注改写。复核先保存在手机，只有家长点击「同步阅读记录」时才发送到当前阅读器，供另一台已配对的家长端查看。状态文件最多保留 512 条，每条可含不超过 256 字的家长备注；不上传原始录音或转写文本。
 
 会话可附带 `answers`，最多保留最后 20 条已播完的答案。每条含 `segmentId`、已审核的 `question`、`answer`、`evidence`、`source` 和播完时距会话开始的 `offsetMs`。板端在播放器正常退出后记入证据。未知问法、原始语音、用户自由输入和音频文件路径不进入摘要。旧会话可以没有 `answers`。
 
@@ -406,4 +408,4 @@ python3 -B -m unittest discover -s tools -p 'test_*.py' -v
   'D:\DevEco Studio\sdk\default\openharmony\ets\build-tools\ets-loader\node_modules\typescript'
 ```
 
-检查覆盖配对请求、证书与错误提示、文件包读取和上传、分页去重、后续页面失败时保留原历史、重复游标拒绝、问答证据校验、设备隔离的定位轨迹校验、家长复核保存、按设备保管密钥、按设备与日期统计，以及缓存写入和同步失败。缓存先以 UTF-8 字节完整写入临时文件，确认所有字节写完并同步后再替换旧文件；短写会继续补写，零字节写入或同步失败不会发布不完整的新历史。输出 JSON 列出每项结果，任一失败时进程返回非零状态。修改 ArkTS 后仍需执行 Hvigor 构建，并在鸿蒙设备上验收文件选择器、系统密钥保管和 UI 操作。
+检查覆盖配对请求、证书与错误提示、文件包读取和上传、分页去重、后续页面失败时保留原历史、重复游标拒绝、问答证据校验、设备隔离的定位轨迹校验、位置复核上传/合并/旧值冲突处理、按设备保管密钥、按设备与日期统计，以及缓存写入和同步失败。缓存先以 UTF-8 字节完整写入临时文件，确认所有字节写完并同步后再替换旧文件；短写会继续补写，零字节写入或同步失败不会发布不完整的新历史。输出 JSON 列出每项结果，任一失败时进程返回非零状态。修改 ArkTS 后仍需执行 Hvigor 构建，并在鸿蒙设备上验收文件选择器、系统密钥保管和 UI 操作。

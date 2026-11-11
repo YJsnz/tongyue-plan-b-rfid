@@ -372,11 +372,20 @@ log('end')
         self.assertEqual(session["answers"][0]["source"], "voice")
         self.assertEqual(session["answers"][0]["evidence"], "因为小兔没有带伞")
         self.assertFalse(any("unexpectedOutput" in event for event in self.events))
+        trace = session["trajectory"][0]
+        review_path = f"/v1/position-reviews/{session['sessionId']}/{trace['eventId']}"
+        review_request = {"status": "position_mismatch", "note": "和孩子复核后发现偏差", "updatedAtMs": 2000}
+        self.assertEqual(self.api("PUT", review_path, token=False),
+                         (401, {"code": "PAIRING_REQUIRED"}))
+        review = self.api("PUT", review_path, review_request)[1]
+        self.assertEqual(review["deviceId"], device_id)
+        self.assertEqual(review["status"], "position_mismatch")
         self.uart.tag(None)
         self.assertEqual(self.stop_reader(), 0)
         self.start_reader()
         self.assertEqual(self.api("GET", "/v1/device")[1]["deviceId"], device_id)
         self.assertEqual(self.api("GET", "/v1/reading-sessions?limit=8")[1]["items"], [session])
+        self.assertEqual(self.api("GET", "/v1/position-reviews")[1]["items"], [review])
         self.uart.tag("0004A12B")
         self.wait_event(lambda event: event.get("status") == "started")
         self.console("select s2")

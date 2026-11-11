@@ -192,7 +192,17 @@ export struct RfidReaderPanel {
       this.save({ address: this.cache.address, currentDevice: deviceId, histories: histories,
         caCertificate: this.cache.caCertificate, books: this.books, positionReviews: this.cache.positionReviews });
       this.showHistory(deviceId);
-      this.message = next.sessions.length > history.sessions.length ? '阅读记录已同步' : '没有新的阅读记录';
+      try {
+        const reviews = await reader.syncPositionReviews(next, this.cache.positionReviews ?? []);
+        if (!this.visible) { return; }
+        this.save({ address: this.cache.address, currentDevice: deviceId, histories: histories,
+          caCertificate: this.cache.caCertificate, books: this.books, positionReviews: reviews });
+        this.message = '阅读记录与位置复核已同步';
+      } catch (error) {
+        if (this.visible) {
+          this.message = '阅读记录已同步；位置复核同步失败：' + ((error as Error).message || '请重试');
+        }
+      }
     } catch (error) {
       if (this.visible) { this.message = (error as Error).message || '同步失败，本机记录仍可查看'; }
     } finally {
@@ -278,7 +288,7 @@ export struct RfidReaderPanel {
         entry.eventId, status, this.reviewNote, Date.now()));
       this.reviewTarget = '';
       this.reviewNote = '';
-      this.message = '位置复核已保存在本机';
+      this.message = '位置复核已保存在本机；同步阅读记录后可供其他家长端查看';
     } catch (error) {
       this.message = (error as Error).message || '复核未保存，请重试';
     }
@@ -311,7 +321,7 @@ export struct RfidReaderPanel {
               this.reviewNote = this.positionReview(session, entry)?.note ?? '';
             });
           if (this.reviewTarget === entry.eventId) {
-            Text('结合当次共读情境核对阅读位置，复核结果保存在本机。')
+            Text('复核先保存在本机。点击“同步阅读记录”后会同步到当前阅读器，供其他已配对家长端查看。')
               .fontFamily(FONT_BODY).fontSize(12).fontColor('#53665E');
             TextInput({ placeholder: '可填写当时读到的内容（选填）', text: this.reviewNote }).maxLength(256)
               .fontFamily(FONT_BODY).onChange((value: string) => { this.reviewNote = value; });

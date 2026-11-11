@@ -23,6 +23,9 @@ from storypack import StoryPack, identifier, read_json
 from storypack_import import MAX_ARCHIVE_BYTES, PackConflict, install
 from reading_trace import STATUSES, append_position, validated_alignment
 
+POSITION_REVIEW_STATUSES = {"needs_review", "position_mismatch", "confirmed"}
+MAX_POSITION_REVIEWS = 512
+
 
 class ApiError(Exception):
     def __init__(self, status, code):
@@ -54,7 +57,8 @@ class Reader:
         if state_path.exists():
             self.state = self.load_state(state_path)
         else:
-            self.save({"deviceId": f"{device_prefix}-{uuid4().hex}", "bindings": {}, "sessions": []})
+            self.save({"deviceId": f"{device_prefix}-{uuid4().hex}", "bindings": {}, "sessions": [],
+                       "positionReviews": []})
 
     @staticmethod
     def load_state(path):
@@ -70,12 +74,49 @@ class Reader:
                     or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", book)):
                 raise StateWriteError(f"Invalid book binding in {path}")
         seen = set()
+        sessions_by_id = {}
         for session in state["sessions"]:
             session_id = session.get("sessionId") if isinstance(session, dict) else None
-            if not isinstance(session_id, str) or not session_id or session_id in seen:
+            if (not isinstance(session_id, str) or
+                    not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", session_id) or session_id in seen):
                 raise StateWriteError(f"Missing or duplicate reading session ID in {path}")
             seen.add(session_id)
+            sessions_by_id[session_id] = session
+        reviews = state.get("positionReviews", [])
+        if not isinstance(reviews, list) or len(reviews) > MAX_POSITION_REVIEWS:
+            raise StateWriteError(f"Invalid position review list in {path}")
+        review_keys = set()
+        for review in reviews:
+            key = Reader.position_review_key(review) if isinstance(review, dict) else None
+            if (key is None or key in review_keys or
+                    not Reader.valid_position_review(review, state["deviceId"], sessions_by_id)):
+                raise StateWriteError(f"Invalid position review in {path}")
+            review_keys.add(key)
         return state
+
+    @staticmethod
+    def position_review_key(review):
+        if not all(isinstance(review.get(field), str) for field in ("deviceId", "sessionId", "eventId")):
+            return None
+        return review["deviceId"], review["sessionId"], review["eventId"]
+
+    @staticmethod
+    def valid_position_review(review, device_id, sessions_by_id):
+        if (not isinstance(review, dict) or review.get("deviceId") != device_id or
+                not isinstance(review.get("sessionId"), str) or
+                not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", review["sessionId"]) or
+                not isinstance(review.get("eventId"), str) or
+                not re.fullmatch(r"[a-f0-9]{32}", review["eventId"]) or
+                not isinstance(review.get("status"), str) or
+                review["status"] not in POSITION_REVIEW_STATUSES or
+                not isinstance(review.get("note"), str) or len(review["note"]) > 256 or
+                type(review.get("updatedAtMs")) is not int or
+                not 0 <= review["updatedAtMs"] <= 9007199254740991):
+            return False
+        session = sessions_by_id.get(review["sessionId"])
+        trajectory = session.get("trajectory") if isinstance(session, dict) else None
+        return (isinstance(trajectory, list) and any(
+            isinstance(entry, dict) and entry.get("eventId") == review["eventId"] for entry in trajectory))
 
     def require_storage(self):
         if self.storage_needs_restart:
@@ -143,6 +184,14 @@ class Reader:
             if limit is not None and not re.fullmatch(r"[1-8]", limit):
                 raise ApiError(400, "INVALID_LIMIT")
             return self.sessions(query.get("after", [""])[0], int(limit) if limit is not None else None)
+        if method == "GET" and path == "/v1/position-reviews":
+            self.require_storage()
+            return {"items": self.state.get("positionReviews", [])}
+        if method == "PUT" and path.startswith("/v1/position-reviews/"):
+            parts = path.removeprefix("/v1/position-reviews/").split("/")
+            if len(parts) != 2:
+                raise ApiError(404, "NOT_FOUND")
+            return self.save_position_review(parts[0], parts[1], data)
         if method == "POST" and path == "/sim/tap":
             return self.tap(data.get("tagUid"))
         if method == "POST" and path == "/sim/finish":
@@ -503,6 +552,34 @@ class Reader:
         if limit is not None:
             result["hasMore"] = end < len(sessions)
         return result
+
+    def save_position_review(self, session_id, event_id, data):
+        self.require_storage()
+        if (not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", session_id) or
+                not re.fullmatch(r"[a-f0-9]{32}", event_id)):
+            raise ApiError(400, "INVALID_POSITION_REVIEW")
+        sessions = {session["sessionId"]: session for session in self.state["sessions"]}
+        session = sessions.get(session_id)
+        trajectory = session.get("trajectory") if isinstance(session, dict) else None
+        if not isinstance(trajectory, list) or not any(
+                isinstance(entry, dict) and entry.get("eventId") == event_id for entry in trajectory):
+            raise ApiError(404, "POSITION_TRACE_NOT_FOUND")
+        candidate = {"deviceId": self.state["deviceId"], "sessionId": session_id, "eventId": event_id,
+                     "status": data.get("status"), "note": data.get("note"),
+                     "updatedAtMs": data.get("updatedAtMs")}
+        if not self.valid_position_review(candidate, self.state["deviceId"], sessions):
+            raise ApiError(400, "INVALID_POSITION_REVIEW")
+        reviews = self.state.get("positionReviews", [])
+        key = self.state["deviceId"], session_id, event_id
+        previous = next((item for item in reviews if self.position_review_key(item) == key), None)
+        if previous is not None and candidate["updatedAtMs"] <= previous["updatedAtMs"]:
+            return previous
+        if previous is None and len(reviews) >= MAX_POSITION_REVIEWS:
+            raise ApiError(409, "POSITION_REVIEW_LIMIT")
+        updated = [item for item in reviews if self.position_review_key(item) != key]
+        updated.append(candidate)
+        self.save({**self.state, "positionReviews": updated})
+        return candidate
 
 
 class Handler(BaseHTTPRequestHandler):

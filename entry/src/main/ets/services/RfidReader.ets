@@ -110,6 +110,13 @@ export interface PositionReview {
   updatedAtMs: number;
 }
 
+interface PositionReviewBatch {
+  items: PositionReview[];
+}
+
+const POSITION_REVIEW_STATUSES: string[] = ['needs_review', 'position_mismatch', 'confirmed'];
+const MAX_POSITION_REVIEWS: number = 512;
+
 function validCount(value: number | undefined): boolean {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -460,5 +467,75 @@ export class RfidReader {
       if (!cursor || cursors.has(cursor)) { throw new Error('阅读器返回了重复的同步位置'); }
     } while (true);
     return { deviceId: history.deviceId, cursor: cursor, sessions: Array.from(sessions.values()) };
+  }
+
+  async syncPositionReviews(history: ReaderHistory, cached: PositionReview[]): Promise<PositionReview[]> {
+    const traces = new Map<string, Set<string>>();
+    history.sessions.forEach((session: ReadingSession) => {
+      const trajectory = validatedTrajectory(session);
+      traces.set(session.sessionId, new Set((trajectory ?? []).map((entry: PositionTrace) => entry.eventId)));
+    });
+
+    const validate = (value: PositionReview): PositionReview => {
+      if (!value || value.deviceId !== history.deviceId || typeof value.sessionId !== 'string' ||
+        !/^[A-Za-z0-9_-]{1,96}$/.test(value.sessionId) || typeof value.eventId !== 'string' ||
+        !/^[a-f0-9]{32}$/.test(value.eventId) || !POSITION_REVIEW_STATUSES.includes(value.status) ||
+        typeof value.note !== 'string' || value.note.length > 256 || !Number.isSafeInteger(value.updatedAtMs) ||
+        value.updatedAtMs < 0 || !traces.get(value.sessionId)?.has(value.eventId)) {
+        throw new Error('阅读器返回了一条无效的位置复核记录');
+      }
+      return { deviceId: value.deviceId, sessionId: value.sessionId, eventId: value.eventId,
+        status: value.status, note: value.note, updatedAtMs: value.updatedAtMs };
+    };
+
+    const readRemote = async (): Promise<Map<string, PositionReview>> => {
+      const batch = await this.request<PositionReviewBatch>('/v1/position-reviews', http.RequestMethod.GET);
+      if (!batch || !Array.isArray(batch.items) || batch.items.length > MAX_POSITION_REVIEWS) {
+        throw new Error('阅读器返回的位置复核列表格式不正确');
+      }
+      const result = new Map<string, PositionReview>();
+      batch.items.forEach((item: PositionReview) => {
+        const review = validate(item);
+        const key = review.sessionId + '/' + review.eventId;
+        if (result.has(key)) { throw new Error('阅读器返回了重复的位置复核记录'); }
+        result.set(key, review);
+      });
+      return result;
+    };
+
+    const localReviews = cached.filter((review: PositionReview) => review.deviceId === history.deviceId);
+    if (cached.length > MAX_POSITION_REVIEWS || localReviews.length > MAX_POSITION_REVIEWS) {
+      throw new Error('本机位置复核记录已达同步上限');
+    }
+    const local = new Map<string, PositionReview>();
+    localReviews.forEach((item: PositionReview) => {
+      const review = validate(item);
+      const key = review.sessionId + '/' + review.eventId;
+      if (local.has(key)) { throw new Error('本机存在重复的位置复核记录'); }
+      local.set(key, review);
+    });
+
+    let remote = await readRemote();
+    const localKeys = Array.from(local.keys());
+    for (let index = 0; index < localKeys.length; index++) {
+      const key = localKeys[index];
+      const review = local.get(key);
+      if (!review) { continue; }
+      const current = remote.get(key);
+      if (!current || review.updatedAtMs > current.updatedAtMs) {
+        const path = '/v1/position-reviews/' + encodeURIComponent(review.sessionId) + '/' +
+          encodeURIComponent(review.eventId);
+        const saved = await this.request<PositionReview>(path, http.RequestMethod.PUT,
+          JSON.stringify({ status: review.status, note: review.note, updatedAtMs: review.updatedAtMs }));
+        remote.set(key, validate(saved));
+      }
+    }
+    remote = await readRemote();
+    const otherDevices = cached.filter((review: PositionReview) => review.deviceId !== history.deviceId);
+    const merged = [...otherDevices, ...Array.from(remote.values())];
+    if (merged.length > MAX_POSITION_REVIEWS) {
+      throw new Error('本机复核记录已达上限，请先整理其他阅读器的复核记录');
+    }
+    return merged;
   }
 }

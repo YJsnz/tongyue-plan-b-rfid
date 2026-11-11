@@ -30,7 +30,7 @@ hvigorw --mode module -p product=default -p module=entry@default assembleHap
 
 真实阅读器的实施顺序、接口草案和真机验收标准见 [Hi3516 + RFID 首轮联调](docs/RFID_MVP.md)。
 
-按原方案附录逐项列出的实现状态与研发缺口见 [方案 B 对照](docs/PLAN_B_STATUS.md)。板端候选默认运行句段级 MFCC/DTW；[电脑 CTC 数字样机](docs/CTC_PC.md) 可输出词位时间并写入模拟会话轨迹。PC 模拟器另有显式开启的原文摘录式自由问句实验；它不替代板端当前的审核 FAQ。家长端现在可查看定位点并保存本机复核标签；复核跨设备同步、容错增量对齐、板端 CTC 接入和鸿蒙界面实机验收仍待完成。
+按原方案附录逐项列出的实现状态与研发缺口见 [方案 B 对照](docs/PLAN_B_STATUS.md)。板端候选默认运行句段级 MFCC/DTW；[电脑 CTC 数字样机](docs/CTC_PC.md) 可输出词位时间并写入模拟会话轨迹。PC 模拟器另有显式开启的原文摘录式自由问句实验；它不替代板端当前的审核 FAQ。家长端可查看定位点并复核；点击同步后可将复核状态和备注同步到阅读器，供其他已配对客户端读取。双家长端端到端操作、容错增量对齐、板端 CTC 接入和鸿蒙界面实机验收仍待完成。
 
 绘本导入与导入后刷卡、问答、摘要恢复的回归检查可运行 `python -B -m unittest discover -s tools -p test_storypack_import.py -v`。基础测试不需要开发板；中文语音用例需要先生成带索引的演示包和 Windows 定位器。手机文件选择与上传仍需在连接的鸿蒙设备上验收。
 

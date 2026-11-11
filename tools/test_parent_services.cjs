@@ -238,6 +238,41 @@ test('parent position reviews are device-scoped, editable and stay separate from
     'confirmed', '注'.repeat(257), 3000), /无法保存/);
 });
 
+test('position review sync uploads local edits and imports the device canonical list', async () => {
+  const recorded = session('review-sync', { trajectory: [trace()], trajectoryDropped: 0,
+    traceStats: { repeated: 0, relocated: 0, uncertain: 0 } });
+  const local = { deviceId: 'reader-1', sessionId: 'review-sync', eventId: trace().eventId,
+    status: 'position_mismatch', note: '再和孩子核对', updatedAtMs: 2000 };
+  const anotherReader = { ...local, deviceId: 'reader-2', sessionId: 'other-session' };
+  network.replies.push(reply({ items: [] }), reply(local), reply({ items: [local] }));
+  const result = await client().syncPositionReviews({ ...history(), sessions: [recorded] }, [local, anotherReader]);
+  assert.deepEqual(json(result), [anotherReader, local]);
+  assert.deepEqual(network.calls.map(item => [item.options.method, new URL(item.url).pathname]), [
+    ['GET', '/v1/position-reviews'],
+    ['PUT', '/v1/position-reviews/review-sync/' + trace().eventId],
+    ['GET', '/v1/position-reviews']
+  ]);
+  assert.deepEqual(JSON.parse(network.calls[1].options.extraData), {
+    status: local.status, note: local.note, updatedAtMs: local.updatedAtMs
+  });
+});
+
+test('position review sync keeps a newer device version and rejects unknown trace references', async () => {
+  const recorded = session('review-sync', { trajectory: [trace()], trajectoryDropped: 0,
+    traceStats: { repeated: 0, relocated: 0, uncertain: 0 } });
+  const local = { deviceId: 'reader-1', sessionId: 'review-sync', eventId: trace().eventId,
+    status: 'needs_review', note: '手机的旧状态', updatedAtMs: 1000 };
+  const remote = { ...local, status: 'confirmed', note: '另一台家长设备已确认', updatedAtMs: 2000 };
+  network.replies.push(reply({ items: [remote] }), reply({ items: [remote] }));
+  const result = await client().syncPositionReviews({ ...history(), sessions: [recorded] }, [local]);
+  assert.deepEqual(json(result), [remote]);
+  assert.deepEqual(network.calls.map(item => item.options.method), ['GET', 'GET']);
+
+  network.replies.push(reply({ items: [{ ...remote, sessionId: 'missing-session' }] }));
+  await assert.rejects(client().syncPositionReviews({ ...history(), sessions: [recorded] }, []), /无效的位置复核/);
+  assert.equal(network.replies.length, 0);
+});
+
 test('position review labels survive cache save and restart', () => {
   const filename = path.join(temporary, 'position-reviews.json');
   const previous = { ...reader.emptyReaderCache(), currentDevice: 'reader-1', histories: [history()] };

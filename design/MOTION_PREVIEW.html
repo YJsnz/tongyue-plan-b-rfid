@@ -1,0 +1,49 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>童阅智伴 · 角色动作预览</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f0f8ed;color:#18382a;font-family:"Microsoft YaHei",sans-serif;padding:40px}
+header{max-width:1200px;margin:auto auto 26px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+h1{font-size:28px;margin:0 0 8px}p{margin:0;color:#658070;font-size:15px}
+.controls{display:flex;gap:10px}button{border:0;border-radius:14px;background:#18b64c;color:white;padding:13px 20px;font-size:16px;cursor:pointer}button.secondary{background:white;color:#31814a}
+main{max-width:1200px;margin:auto;display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+article{background:#fffdf5;border-radius:28px;padding:20px 10px;box-shadow:0 7px 0 #d7e9d2;text-align:center;overflow:hidden}article:nth-child(2){background:#fff3c7}article:nth-child(3){background:#f2ebff}article:nth-child(4){background:#dff8dd}
+canvas{width:100%;height:auto;cursor:pointer}h2{font-size:20px;margin:12px 0 8px}small{color:#6d8175;font-size:14px;line-height:1.8}.status{margin:26px auto;text-align:center;color:#4a785c}
+@media(max-width:850px){main{grid-template-columns:repeat(2,1fr)}body{padding:22px}header{align-items:flex-start;flex-direction:column}}
+</style>
+<header><div><h1>故事里的小伙伴，动起来了</h1><p>点击人物可重播；每组动作完成后，安静待机 10 秒。</p></div><div class="controls"><button id="replay">一起重播</button><button class="secondary" id="pause">暂停</button></div></header>
+<main><article><canvas id="reading" width="400" height="400" aria-label="读书男孩动作预览"></canvas><h2>读书男孩</h2><small>低头看看书，再抬起头</small></article><article><canvas id="reward" width="400" height="400" aria-label="抱星男孩动作预览"></canvas><h2>抱星男孩</h2><small>抱紧星星，轻轻摇一摇</small></article><article><canvas id="thinking" width="400" height="400" aria-label="好奇女孩动作预览"></canvas><h2>好奇女孩</h2><small>歪头想一想，再慢慢回正</small></article><article><canvas id="happy" width="400" height="400" aria-label="开心女孩动作预览"></canvas><h2>开心女孩</h2><small>抬起双手，起跳再落地</small></article></main><p class="status" id="status">正在准备人物…</p>
+<script>
+const kinds=['reading','reward','thinking','happy'], images={}, starts={}, contexts={}, reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let paused=false, pausedAt=0;const still=new URLSearchParams(location.search).has('still');
+function pose(kind,t){
+ let a=[4,7,3,-2,0],b=[0,0,0,0,0],y=[0,-.01,0,0,0],s=[1,1,1,1,1],d=[480,520,480,420,440];
+ if(kind==='reward'){a=[-4,4,-2,1,0];y=[-.02,-.035,-.01,0,0]}
+ if(kind==='thinking'){a=[-5,-9,-9,3,0];d=[420,480,460,420,420]}
+ if(kind==='happy'){a=[-8,-13,-8,3,0];b=[8,13,8,-3,0];y=[.015,-.09,-.14,.012,0];s=[.97,1.02,1.02,.96,1];d=[300,420,360,320,400]}
+ const total=d.reduce((v,x)=>v+x,0);t=Math.max(0,t-400)%(total+10000);
+ if(t>=total||reduced||still)return [0,0,0,1];
+ let prev=[0,0,0,1];for(let i=0;i<d.length;i++){let next=[a[i],b[i],y[i],s[i]];if(t<=d[i]){const u=t/d[i],e=(1-Math.cos(u*Math.PI))/2;return next.map((v,j)=>prev[j]+(v-prev[j])*e)} t-=d[i];prev=next}return prev;
+}
+function draw(kind,t){
+ const ctx=contexts[kind],im=images[kind],w=400,sw=im.width/2,sh=im.height,[a,b,y,s]=pose(kind,t);
+ ctx.clearRect(0,0,w,w);ctx.save();if(kind==='happy'){ctx.translate(w*.08,w*.12);ctx.scale(.84,.84)}ctx.translate(0,y*w);ctx.translate(w/2,w/2);ctx.scale(1,s);ctx.translate(-w/2,-w/2);
+ function cell(n){ctx.save();if(kind==='thinking'&&n===0){ctx.beginPath();ctx.rect(0,0,w*.96,w);ctx.clip()}ctx.drawImage(im,n*sw,0,sw,sh,0,0,w,w);ctx.restore()}
+ cell(0);
+ if(kind==='thinking'){ctx.fillStyle='#FFD0A8';ctx.beginPath();ctx.ellipse(w*.81,w*.84,w*.052,w*.028,0,0,Math.PI*2);ctx.fill()}
+ if(kind==='happy'){
+  for(const right of [false,true]){
+   const px=(right?.60:.34)*w,py=(right?.59:.54)*w,dy=(right?-.01:-.05)*w;
+   ctx.save();ctx.translate(0,dy);ctx.translate(px,py);ctx.rotate((right?b:a)*Math.PI/180);ctx.translate(-px,-py);ctx.beginPath();ctx.rect(right?w/2:w*.05,0,right?w/2:w*.45,w);ctx.clip();cell(1);ctx.restore();
+  }
+ }else{
+  const sc=kind==='thinking'?.9:.82,dx=kind==='reading'?.01:kind==='reward'?.25:-.03,dy=kind==='reading'?-.03:kind==='reward'?.12:.03;
+  ctx.save();ctx.translate(dx*w,dy*w);ctx.scale(sc,sc);const px=(kind==='reward'?.5:.52)*w,py=(kind==='reward'?.7:.78)*w;
+  ctx.translate(px,py);ctx.rotate(a*Math.PI/180);ctx.translate(-px,-py);cell(1);ctx.restore();
+ }
+ ctx.restore();
+}
+function frame(now){if(!window.previewCapture)for(const k of kinds)if(images[k]?.complete)draw(k,(paused?pausedAt:now)-starts[k]);requestAnimationFrame(frame)}
+window.renderPreviewFrame=time=>{window.previewCapture=true;for(const k of kinds)draw(k,time)};
+Promise.all(kinds.map(k=>new Promise(resolve=>{const im=new Image();contexts[k]=document.getElementById(k).getContext('2d');im.onload=()=>{images[k]=im;starts[k]=performance.now();resolve()};im.src='../entry/src/main/resources/base/media/rig_'+k+'.png';document.getElementById(k).onclick=()=>{starts[k]=paused?pausedAt:performance.now()}}))).then(()=>{document.getElementById('status').textContent='人物分层 · 连续动作 · 10 秒待机';requestAnimationFrame(frame);window.previewReady=true});
+document.getElementById('replay').onclick=()=>{for(const k of kinds)starts[k]=paused?pausedAt:performance.now()};
+document.getElementById('pause').onclick=()=>{paused=!paused;if(paused)pausedAt=performance.now();else{const elapsed=performance.now()-pausedAt;for(const k of kinds)starts[k]+=elapsed}document.getElementById('pause').textContent=paused?'继续播放':'暂停'};
+</script></html>

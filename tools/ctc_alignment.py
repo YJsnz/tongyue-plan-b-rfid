@@ -207,6 +207,7 @@ class CtcBookTracker:
         self.syllable_nodes = []
         self.syllable_words = {}
         self.syllable_label_ids = self._syllable_label_map(acoustic)
+        self.syllable_beam_state = None
         for segment_index, record in enumerate(text_index.segments):
             offsets = [index for index, char in enumerate(record["text"]) if char.isalnum()]
             normalized = readable(record["text"])
@@ -281,41 +282,51 @@ class CtcBookTracker:
     def _syllable_beam(self, scores, start_seconds, *, final=True, end_seconds=None):
         if not self.syllable_nodes or not self.syllable_label_ids:
             return None
-        anchor = self.final_position or self.position
-        if anchor is None:
-            return None
-        anchor_node = max((index for index, node in enumerate(self.syllable_nodes)
-                           if node["segmentId"] == anchor[0] and node["wordIndex"] == anchor[1]), default=None)
-        if anchor_node is None or len(scores) < MIN_SYLLABLE_BEAM_HITS:
-            return None
         import numpy as np
+        beam_state = self.syllable_beam_state
+        if beam_state is not None:
+            processed = beam_state["processed"]
+            stale = (beam_state["startSeconds"] != start_seconds or len(scores) < processed or
+                     scores.shape[1] != beam_state["vocabularySize"] or
+                     (processed and not np.array_equal(scores[processed - 1], beam_state["lastFrame"])))
+            if stale:
+                beam_state = None
+                self.syllable_beam_state = None
+        if len(scores) < MIN_SYLLABLE_BEAM_HITS:
+            return None
+
+        if beam_state is None:
+            anchor = self.final_position or self.position
+            if anchor is None:
+                return None
+            anchor_node = max((index for index, node in enumerate(self.syllable_nodes)
+                               if node["segmentId"] == anchor[0] and node["wordIndex"] == anchor[1]), default=None)
+            if anchor_node is None:
+                return None
+            left = max(0, anchor_node - SYLLABLE_BEAM_RADIUS)
+            right = min(len(self.syllable_nodes), anchor_node + SYLLABLE_BEAM_RADIUS + 1)
+            window = self.syllable_nodes[left:right]
+            width = len(window)
+            start_states = [index for index, node in enumerate(window)
+                            if node["wordStart"] and left + index <= anchor_node]
+            if anchor_node + 1 < right:
+                start_states.append(anchor_node + 1 - left)
+            start_states = sorted(set(start_states))
+            if not start_states or width < MIN_SYLLABLE_BEAM_HITS:
+                return None
+            beam_state = {"startSeconds": start_seconds, "anchor": anchor,
+                          "left": left, "window": window, "width": width,
+                          "startStates": start_states, "processed": 0,
+                          "previous": np.full(width, -np.inf, dtype=np.float64), "history": [],
+                          "blankFrames": [], "blankRun": 0, "lastFrame": None,
+                          "vocabularySize": scores.shape[1]}
+            self.syllable_beam_state = beam_state
+        anchor = beam_state["anchor"]
+        left = beam_state["left"]
+        window, width = beam_state["window"], beam_state["width"]
         frame_seconds = self.acoustic.frame_seconds
         end = start_seconds + len(scores) * frame_seconds
         end = end if end_seconds is None else min(end, end_seconds)
-        left = max(0, anchor_node - SYLLABLE_BEAM_RADIUS)
-        right = min(len(self.syllable_nodes), anchor_node + SYLLABLE_BEAM_RADIUS + 1)
-        window = self.syllable_nodes[left:right]
-        width = len(window)
-        start_states = [index for index, node in enumerate(window)
-                        if node["wordStart"] and left + index <= anchor_node]
-        if anchor_node + 1 < right:
-            start_states.append(anchor_node + 1 - left)
-        start_states = sorted(set(start_states))
-        if not start_states or width < MIN_SYLLABLE_BEAM_HITS:
-            return None
-
-        emissions = np.full((len(scores), width), -12.0, dtype=np.float32)
-        for index, node in enumerate(window):
-            labels = node["labels"]
-            if labels:
-                emissions[:, index] = np.max(scores[:, labels], axis=1)
-        blank_probability = np.exp(np.clip(scores[:, self.acoustic.blank_id], -60, 0))
-        blank_frames = blank_probability >= BLANK_FREEZE_PROBABILITY
-        history = np.full((len(scores), width), -2, dtype=np.int16)
-        previous = np.full(width, -np.inf, dtype=np.float64)
-        first_emission = np.where(blank_frames[0], 0.0, emissions[0])
-        previous[start_states] = first_emission[start_states]
-        history[0, start_states] = -1
 
         def prune(values):
             active = np.flatnonzero(np.isfinite(values))
@@ -326,37 +337,63 @@ class CtcBookTracker:
                 values[removed] = -np.inf
             return values
 
-        previous = prune(previous)
-        blank_run = 1 if blank_frames[0] else 0
-        for frame in range(1, len(scores)):
-            blank_run = blank_run + 1 if blank_frames[frame] else 0
-            current = np.full(width, -np.inf, dtype=np.float64)
-            for target in range(width):
-                options = [(target, -0.2)]
-                if blank_run >= 2:
-                    pass  # Sustained silence freezes the beam position.
-                elif blank_run == 1:
-                    if (target > 0 and window[target - 1]["pinyin"] == window[target]["pinyin"]):
-                        options.append((target - 1, -1.5))
-                else:
-                    if target > 0:
-                        options.append((target - 1, -0.45))
-                    if target > 1:
-                        options.append((target - 2, -2.5))
-                    if target + 1 < width:
-                        options.append((target + 1, -2.5))
-                best_value, best_source = -np.inf, -1
-                for source, penalty in options:
-                    value = previous[source] + penalty
-                    if value > best_value:
-                        best_value, best_source = value, source
-                if best_source >= 0:
-                    current[target] = best_value + (0.0 if blank_frames[frame] else emissions[frame, target])
-                    history[frame, target] = best_source
-            previous = prune(current)
+        while beam_state["processed"] < len(scores):
+            frame = beam_state["processed"]
+            frame_scores = scores[frame]
+            blank_probability = float(np.exp(np.clip(frame_scores[self.acoustic.blank_id], -60, 0)))
+            blank_frame = blank_probability >= BLANK_FREEZE_PROBABILITY
+            emissions = np.full(width, -12.0, dtype=np.float32)
+            for index, node in enumerate(window):
+                labels = node["labels"]
+                if labels:
+                    emissions[index] = np.max(frame_scores[labels])
+            history_row = np.full(width, -2, dtype=np.int16)
+            if frame == 0:
+                previous = beam_state["previous"]
+                first_emission = np.where(blank_frame, 0.0, emissions)
+                previous[beam_state["startStates"]] = first_emission[beam_state["startStates"]]
+                previous = prune(previous)
+                history_row[beam_state["startStates"]] = -1
+                blank_run = 1 if blank_frame else 0
+            else:
+                blank_run = beam_state["blankRun"] + 1 if blank_frame else 0
+                previous = beam_state["previous"]
+                current = np.full(width, -np.inf, dtype=np.float64)
+                for target in range(width):
+                    options = [(target, -0.2)]
+                    if blank_run >= 2:
+                        pass  # Sustained silence freezes the beam position.
+                    elif blank_run == 1:
+                        if (target > 0 and window[target - 1]["pinyin"] == window[target]["pinyin"]):
+                            options.append((target - 1, -1.5))
+                    else:
+                        if target > 0:
+                            options.append((target - 1, -0.45))
+                        if target > 1:
+                            options.append((target - 2, -2.5))
+                        if target + 1 < width:
+                            options.append((target + 1, -2.5))
+                    best_value, best_source = -np.inf, -1
+                    for source, penalty in options:
+                        value = previous[source] + penalty
+                        if value > best_value:
+                            best_value, best_source = value, source
+                    if best_source >= 0:
+                        current[target] = best_value + (0.0 if blank_frame else emissions[target])
+                        history_row[target] = best_source
+                previous = prune(current)
+            beam_state["previous"] = previous
+            beam_state["blankRun"] = blank_run
+            beam_state["history"].append(history_row)
+            beam_state["blankFrames"].append(blank_frame)
+            beam_state["processed"] = frame + 1
+            beam_state["lastFrame"] = frame_scores.copy()
             if not np.isfinite(previous).any():
+                self.syllable_beam_state = None
                 return None
 
+        previous = beam_state["previous"]
+        blank_frames = beam_state["blankFrames"]
         scores_by_word = {}
         for index, value in enumerate(previous):
             if not np.isfinite(value):
@@ -370,20 +407,17 @@ class CtcBookTracker:
         if not ranked:
             return None
         best_key, best_score = ranked[0]
-        second_score = ranked[1][1] if len(ranked) > 1 else -np.inf
-        margin = best_score - second_score
+        margin = best_score - ranked[1][1] if len(ranked) > 1 else 0.0
         local_end = self.syllable_words[best_key][-1] - left
         if not 0 <= local_end < width or not np.isfinite(previous[local_end]):
             return None
-        if local_end is None:
-            return None
         path = np.full(len(scores), -1, dtype=np.int16)
-        state = local_end
+        path_state = local_end
         for frame in range(len(scores) - 1, -1, -1):
-            if state < 0:
+            if path_state < 0:
                 break
-            path[frame] = state
-            state = int(history[frame, state])
+            path[frame] = path_state
+            path_state = int(beam_state["history"][frame][path_state])
 
         observed = set()
         exact_frames = {}
@@ -392,7 +426,7 @@ class CtcBookTracker:
                 continue
             node = window[int(local_index)]
             labels = node["labels"]
-            if not labels or emissions[frame, local_index] < math.log(0.05):
+            if not labels or np.max(scores[frame, labels]) < math.log(0.05):
                 continue
             node_index = left + int(local_index)
             observed.add(node_index)
@@ -456,6 +490,13 @@ class CtcBookTracker:
                      observedSyllables=len(observed))
 
     def locate(self, scores, start_seconds=0, *, final=True, end_seconds=None):
+        try:
+            return self._locate_with_fragments(scores, start_seconds, final=final, end_seconds=end_seconds)
+        finally:
+            if final:
+                self.syllable_beam_state = None
+
+    def _locate_with_fragments(self, scores, start_seconds=0, *, final=True, end_seconds=None):
         stitched = self._stitch_pending(scores, start_seconds)
         if stitched is not None:
             combined, combined_start = stitched

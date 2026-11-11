@@ -366,6 +366,44 @@ test('reading statistics isolate the current device and exclude unknown dates', 
   assert.equal(stats.confirmedEndTime(session('future', { endedAtMs: now + 600000 }), now), undefined);
 });
 
+test('weekly position review metrics follow the selected reader and reading week', () => {
+  const now = new Date(2026, 10, 11, 12).getTime();
+  const currentId = '11111111111111111111111111111111';
+  const currentConfirmedId = '22222222222222222222222222222222';
+  const previousId = '33333333333333333333333333333333';
+  const orphanedId = '44444444444444444444444444444444';
+  const current = session('review-current-week', { endedAtMs: new Date(2026, 10, 10, 10).getTime(),
+    trajectory: [trace(currentId), trace(currentConfirmedId, { offsetMs: 800 })], trajectoryDropped: 0,
+    traceStats: { repeated: 0, relocated: 0, uncertain: 0 } });
+  const previous = session('review-previous-week', { endedAtMs: new Date(2026, 10, 6, 10).getTime(),
+    trajectory: [trace(previousId)], trajectoryDropped: 0,
+    traceStats: { repeated: 0, relocated: 0, uncertain: 0 } });
+  const reviews = [
+    { deviceId: 'reader-1', sessionId: current.sessionId, eventId: currentId,
+      status: 'position_mismatch', note: '', updatedAtMs: now },
+    { deviceId: 'reader-1', sessionId: current.sessionId, eventId: currentConfirmedId,
+      status: 'confirmed', note: '', updatedAtMs: now },
+    { deviceId: 'reader-1', sessionId: previous.sessionId, eventId: previousId,
+      status: 'needs_review', note: '', updatedAtMs: now },
+    { deviceId: 'reader-1', sessionId: current.sessionId, eventId: orphanedId,
+      status: 'confirmed', note: '', updatedAtMs: now },
+    { deviceId: 'reader-2', sessionId: current.sessionId, eventId: currentId,
+      status: 'position_mismatch', note: '', updatedAtMs: now }
+  ];
+  const cache = { currentDevice: 'reader-1', histories: [
+    { deviceId: 'reader-1', cursor: '', sessions: [current, previous] },
+    { deviceId: 'reader-2', cursor: '', sessions: [current] }
+  ], positionReviews: reviews };
+
+  const summary = stats.summarizeReading(cache, now);
+
+  assert.deepEqual(json([summary.currentWeek.reviewCount, summary.currentWeek.mismatchCount,
+    summary.currentWeek.confirmedCount, summary.currentWeek.needsReviewCount]), [2, 1, 1, 0]);
+  assert.deepEqual(json([summary.previousWeek.reviewCount, summary.previousWeek.mismatchCount,
+    summary.previousWeek.confirmedCount, summary.previousWeek.needsReviewCount]), [1, 0, 0, 1]);
+  assert.equal(cache.histories[0].sessions[0].trajectory[0].status, 'matched');
+});
+
 (async () => {
   const results = [];
   try {

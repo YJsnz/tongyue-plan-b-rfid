@@ -546,6 +546,21 @@ struct Index {
             }.width('100%');
             this.TrendBars(this.selectedWeek().dailyMinutes, this.selectedWeek().chartMaximum);
           }.padding(14).width('100%').backgroundColor(LIGHT).borderRadius(19);
+          Column({ space: 8 }) {
+            Row() {
+              Text('位置复核').fontFamily(FONT_STRONG).fontSize(17).fontColor(INK).layoutWeight(1);
+              Text('按共读周统计').fontFamily(FONT_BODY).fontSize(12).fontColor(MUTED);
+            }.width('100%');
+            Row({ space: 6 }) {
+              this.GrowthMetric('!', '标记不符', this.selectedWeek().mismatchCount.toString(), '处', '#E08A29');
+              this.GrowthMetric('✓', '确认无误', this.selectedWeek().confirmedCount.toString(), '处', '#18C94E');
+              this.GrowthMetric('·', '待核对', this.selectedWeek().needsReviewCount.toString(), '处', '#45A0F6');
+            }.width('100%');
+            Text(this.selectedWeek().reviewCount > 0 ?
+              this.growthPeriod + '复核 ' + this.selectedWeek().reviewCount + ' 个定位点；复核状态独立于原始阅读轨迹。' :
+              '该周暂无位置复核记录。')
+              .fontFamily(FONT_BODY).fontSize(13).fontColor(MUTED).lineHeight(20);
+          }.padding(13).width('100%').backgroundColor(LIGHT).borderRadius(19);
           if (this.readingSummary.undatedCount > 0) {
             Text(this.readingSummary.undatedCount + ' 条记录的阅读日期未知，可到设备中心查看。')
               .fontFamily(FONT_BODY).fontSize(14).fontColor(MUTED);

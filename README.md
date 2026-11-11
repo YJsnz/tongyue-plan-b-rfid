@@ -170,7 +170,7 @@ StoryPack 格式和作者材料见 [STORYPACK_FORMAT.md](docs/STORYPACK_FORMAT.m
 以下为 2026-11-11 仓库记录的基线；每次相关代码开发后应重新运行受影响检查，并更新本节及任务证据。
 
 - Windows Python 3.14 全量回归：83 项、0 失败、16 项按平台/可选模型条件跳过。
-- WSL 全量回归：84 项、82 通过、2 项按平台条件跳过、0 失败；7 项真实 CTC 模型检查通过，包括流式定位、StoryPack 音节 Beam、固定 TTS 波形变异和自由语音问句证据检查。
+- WSL 全量回归：87 项、85 通过、2 项按平台条件跳过、0 失败；7 项真实 CTC 模型检查全部通过，包括流式定位、StoryPack 音节 Beam、静音词拒绝、官方 sherpa-onnx 转写对照、固定 TTS 波形变异和自由语音问句证据检查。使用含 CTC、StoryPack 作者依赖和 sherpa-onnx 的完整 WSL 环境，以及十段演示夹具。
 - 家长端服务逻辑电脑回归：24/24 通过；两个独立家长端与 Python 阅读器 HTTP 处理器的复核同步端到端检查通过。
 - HarmonyOS API 26 unsigned HAP：Hvigor assembleHap 成功；已在 HarmonyOS 7 API 26 Mate 90 Pro 模拟器查看成长页位置复核卡片并切换本周/上周，样例复核数为零。
 - 模拟器阅读器联调：记录了 PC RFID 服务连接、模拟标签绑定和刷卡启动、阅读记录/问答证据同步、应用重启缓存恢复。模拟标签呈送不是 PN532 实物读卡。

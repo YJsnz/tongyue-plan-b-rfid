@@ -59,8 +59,10 @@ python -B -m unittest discover -s tools -p test_ctc_alignment.py -v
 
 ```sh
 python -m pip install sherpa-onnx==2.0.1
-TONGYUE_CTC_MODEL=output/ctc-zh-pinned TONGYUE_CTC_DEMO=output/rfid-demo-text-index python -B -m unittest discover -s tools -p 'test_ctc_*.py' -v
+TONGYUE_CTC_MODEL=output/ctc-zh-pinned TONGYUE_CTC_DEMO=output/rfid-demo-g2-ten python -B -m unittest discover -s tools -p 'test_ctc_*.py' -v
 ```
+
+这组真实模型测试需使用同时安装 `requirements-ctc-pc.txt` 和 `requirements-authoring.txt` 的 Python 环境，并将 `TONGYUE_CTC_DEMO` 指向包含 `question-free.wav` 的 `rfid-demo-g2-ten`。仅安装 CTC 推理依赖会缺少 pypinyin，音节 Beam 无法生成标签；可选官方转写对照还需安装 sherpa-onnx。
 
 `bench_ctc_pc.py` 可生成模型版本、转写、词位日志、加载耗时与推理 RTF 报告；该诊断报告包含所选录音的转写，仅适用于明确选定的本地验证材料。
 

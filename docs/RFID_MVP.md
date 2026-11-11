@@ -429,3 +429,15 @@ python3 -B -m unittest discover -s tools -p 'test_*.py' -v
 ```
 
 检查覆盖配对请求、证书与错误提示、文件包读取和上传、分页去重、后续页面失败时保留原历史、重复游标拒绝、问答证据校验、设备隔离的定位轨迹校验、位置复核上传/合并/旧值冲突处理、按设备保管密钥、按设备与日期统计，以及缓存写入和同步失败。缓存先以 UTF-8 字节完整写入临时文件，确认所有字节写完并同步后再替换旧文件；短写会继续补写，零字节写入或同步失败不会发布不完整的新历史。输出 JSON 列出每项结果，任一失败时进程返回非零状态。修改 ArkTS 后仍需执行 Hvigor 构建，并在鸿蒙设备上验收文件选择器、系统密钥保管和 UI 操作。
+
+### 双家长端复核电脑联调
+
+`tools/test_parent_review_e2e.py` 会启动真实 Python 阅读器 HTTP 处理器，并用 DevEco 自带 TypeScript 转换实际的 `RfidReader.ets`。两个独立客户端分别模拟家长 A 和 B：A 上传位置复核；测试重新从磁盘加载阅读器状态；B 拉取、更新并上传；A 再拉取 B 的更新。该检查覆盖实际 HTTP 协议、复核合并和阅读器状态重载，但客户端网络 API 使用电脑适配器，不运行 ArkUI，也不能替代双鸿蒙设备 UI 验收。
+
+在 Windows 项目根目录运行：
+
+```powershell
+$env:TONGYUE_TYPESCRIPT = 'D:\DevEco Studio\sdk\default\openharmony\ets\build-tools\ets-loader\node_modules\typescript'
+$env:TONGYUE_NODE = 'D:\DevEco Studio\tools\node\node.exe'
+py -X utf8 -B -m unittest discover -s tools -p test_parent_review_e2e.py -v
+```

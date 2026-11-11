@@ -152,6 +152,40 @@ class CtcAlignmentTests(unittest.TestCase):
         self.assertEqual((result["status"], result["reason"]), ("uncertain", "reference_mismatch"))
         self.assertIsNone(self.tracker.position)
 
+    def test_book_dp_relocates_a_long_noisy_phrase_outside_the_local_window(self):
+        target = "孩子们一起在森林里快乐地唱歌回家"
+        texts = [self.texts[0], self.texts[1], self.texts[2], target]
+        acoustic = FakeAcoustic(texts + ["大" + target])
+        tracker = CtcBookTracker(FakeIndex(texts), acoustic)
+        tracker.locate(acoustic.scores(texts[0]))
+
+        result = tracker.locate(acoustic.scores("大" + target))
+        self.assertEqual((result["status"], result["segmentId"], result["alignmentMode"], result["editDistance"]),
+                         ("relocated", "s4", "book_dp", 1))
+        self.assertEqual([word["text"] for word in result["words"]],
+                         [target[index:index + 2] for index in range(0, len(target), 2)])
+
+    def test_book_dp_freezes_when_far_passages_are_equally_good(self):
+        target = "孩子们一起在森林里快乐地唱歌回家"
+        texts = [self.texts[0], self.texts[1], self.texts[2], target, target]
+        acoustic = FakeAcoustic(texts + ["大" + target])
+        tracker = CtcBookTracker(FakeIndex(texts), acoustic)
+        tracker.locate(acoustic.scores(texts[0]))
+
+        result = tracker.locate(acoustic.scores("大" + target))
+        self.assertEqual((result["status"], result["segmentId"], result["reason"]),
+                         ("uncertain", "s1", "ambiguous_book_alignment"))
+        self.assertEqual(tracker.final_position, ("s1", 3))
+
+    def test_book_dp_does_not_fuzzy_relocate_before_a_position_anchor(self):
+        target = "孩子们一起在森林里快乐地唱歌回家"
+        texts = [self.texts[0], self.texts[1], self.texts[2], target]
+        acoustic = FakeAcoustic(texts + ["大" + target])
+        tracker = CtcBookTracker(FakeIndex(texts), acoustic)
+        result = tracker.locate(acoustic.scores("大" + target))
+        self.assertEqual((result["status"], result["reason"]), ("uncertain", "reference_mismatch"))
+        self.assertIsNone(tracker.final_position)
+
     def test_local_dp_omits_word_with_a_substitution_then_recovers(self):
         self.locate(self.texts[0])
         result = self.locate("小兔站在大树下门")

@@ -9,6 +9,8 @@ import math
 
 MAX_FRAGMENT_STITCH_GAP_SECONDS = 1.5
 MAX_FRAGMENT_STITCH_FRAMES = 200
+MIN_BOOK_DP_CHARS = 16
+MAX_BOOK_DP_CANDIDATES = 16
 
 
 def readable(text):
@@ -126,6 +128,56 @@ def _local_edit_alignments(query, reference):
     return alignments
 
 
+def _fuzzy_candidates(hypothesis, references, max_edits, minimum_exact):
+    fuzzy, costs, ambiguous = [], [], False
+    for segment_index, record, normalized, offsets in references:
+        alignments = _local_edit_alignments(hypothesis, normalized)
+        if not alignments:
+            continue
+        distance = alignments[0][0]
+        costs.append((segment_index, distance))
+        if distance > max_edits:
+            continue
+        if len(alignments) > 1:
+            ambiguous = True
+        for _, begin, mapping in alignments:
+            exact_count = sum(index is not None for index in mapping)
+            if exact_count < minimum_exact:
+                continue
+            finish = max(index for index in mapping if index is not None) + 1
+            fuzzy.append((segment_index, record, begin, finish, offsets, mapping, distance))
+    return fuzzy, costs, ambiguous
+
+
+def _resolve_fuzzy(fuzzy, costs, ambiguous):
+    if not fuzzy:
+        return None, ambiguous
+    best_distance = min(candidate[-1] for candidate in fuzzy)
+    best = [candidate for candidate in fuzzy if candidate[-1] == best_distance]
+    other_distances = [distance for index, distance in costs if index != best[0][0]]
+    second_distance = min(other_distances, default=None)
+    if (ambiguous or len(best) != 1 or
+            (second_distance is not None and second_distance - best_distance < 2)):
+        return None, True
+    return best[0], False
+
+
+def _book_dp_seeded_references(hypothesis, references, local_start, local_end):
+    grams = {hypothesis[index:index + 3] for index in range(len(hypothesis) - 2)}
+    if len(grams) < 2:
+        return []
+    candidates = []
+    for reference in references:
+        segment_index, _, normalized, _ = reference
+        if (local_start <= segment_index < local_end or not 4 <= len(normalized) <= 2048 or
+                sum(1 for gram in grams if gram in normalized) < 2):
+            continue
+        candidates.append(reference)
+        if len(candidates) > MAX_BOOK_DP_CANDIDATES:
+            return None
+    return candidates
+
+
 def event(backend, status, segment_id, start, end, *, words=None, reason=None, **details):
     """Shared JSONL contract: no invented word positions for segment-only MFCC."""
     return {"formatVersion": 1, "backend": backend,
@@ -229,6 +281,7 @@ class CtcBookTracker:
                                  if record["segmentId"] == anchor[0]), None)
         local_start = max(0, anchor_index - 1) if anchor_index is not None else 0
         local_end = min(len(self.references), anchor_index + 3) if anchor_index is not None else 0
+        alignment_mode = "exact"
 
         def exact_matches(indices=None):
             found = []
@@ -254,34 +307,29 @@ class CtcBookTracker:
         if not candidates and anchor_index is not None and 8 <= len(hypothesis) <= 128:
             max_edits = min(2, max(1, len(hypothesis) // 12))
             minimum_exact = max(6, math.ceil(len(hypothesis) * 0.8))
-            fuzzy, local_costs, ambiguous_placement = [], [], False
-            for segment_index, record, normalized, offsets in self.references[local_start:local_end]:
-                alignments = _local_edit_alignments(hypothesis, normalized)
-                if not alignments:
-                    continue
-                distance = alignments[0][0]
-                local_costs.append((segment_index, distance))
-                if distance > max_edits:
-                    continue
-                if len(alignments) > 1:
-                    ambiguous_placement = True
-                for _, begin, mapping in alignments:
-                    exact_count = sum(index is not None for index in mapping)
-                    if exact_count < minimum_exact:
-                        continue
-                    finish = max(index for index in mapping if index is not None) + 1
-                    fuzzy.append((segment_index, record, begin, finish, offsets, mapping, distance))
-            if fuzzy:
-                best_distance = min(candidate[-1] for candidate in fuzzy)
-                best = [candidate for candidate in fuzzy if candidate[-1] == best_distance]
-                second_distance = min((distance for index, distance in local_costs
-                                       if index != best[0][0]), default=None)
-                if (ambiguous_placement or len(best) != 1 or
-                        (second_distance is not None and second_distance - best_distance < 2)):
-                    return uncertain("ambiguous_local_alignment")
-                candidates = best
-            elif ambiguous_placement:
+            fuzzy, costs, ambiguous = _fuzzy_candidates(
+                hypothesis, self.references[local_start:local_end], max_edits, minimum_exact)
+            selected, ambiguous = _resolve_fuzzy(fuzzy, costs, ambiguous)
+            if selected is not None:
+                candidates = [selected]
+                alignment_mode = "local_edit"
+            elif ambiguous:
                 return uncertain("ambiguous_local_alignment")
+        if (not candidates and anchor_index is not None and
+                MIN_BOOK_DP_CHARS <= len(hypothesis) <= 128):
+            max_edits = min(2, max(1, len(hypothesis) // 12))
+            minimum_exact = max(6, math.ceil(len(hypothesis) * 0.8))
+            references = _book_dp_seeded_references(
+                hypothesis, self.references, local_start, local_end)
+            if references is None:
+                return uncertain("ambiguous_book_search")
+            fuzzy, costs, ambiguous = _fuzzy_candidates(hypothesis, references, max_edits, minimum_exact)
+            selected, ambiguous = _resolve_fuzzy(fuzzy, costs, ambiguous)
+            if selected is not None:
+                candidates = [selected]
+                alignment_mode = "book_dp"
+            elif ambiguous:
+                return uncertain("ambiguous_book_alignment")
         if not candidates:
             return uncertain("reference_mismatch")
         try:
@@ -342,4 +390,4 @@ class CtcBookTracker:
         return event("ctc", status, record["segmentId"], start_seconds, end, words=words,
                      wordIndex=next_position[1], textStart=covered[0], textEnd=covered[-1] + 1,
                      acousticGap=aligned["acousticGap"], final=final,
-                     alignmentMode="local_edit" if edit_distance else "exact", editDistance=edit_distance)
+                     alignmentMode=alignment_mode if edit_distance else "exact", editDistance=edit_distance)

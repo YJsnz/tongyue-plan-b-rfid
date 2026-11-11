@@ -1,8 +1,11 @@
 import { ReferenceCompanion } from '../components/ReferenceCompanion';
 import { HomeWelcomeMascot } from '../components/HomeWelcomeMascot';
 import { ReadingRadar } from '../components/ReadingRadar';
+import { RfidReaderPanel } from '../components/RfidReaderPanel';
 import { LengthMetrics } from '@kit.ArkUI';
 import { FONT_BODY, FONT_STRONG, FONT_TITLE } from '../theme/Typography';
+import { emptyReaderCache, readReaderCache, ReaderCache } from '../services/RfidReader';
+import { formatReadingDuration, ReadingSummary, ReadingWeek, summarizeReading } from '../services/ReadingStats';
 
 const INK: string = '#152044';
 const LIGHT: string = '#FFFFFF';
@@ -17,7 +20,7 @@ struct Index {
   @State view: string = '';
   @State selected: number = 0;
   @State page: number = 8;
-  @State complete: boolean = false;
+  @State readingSummary: ReadingSummary = summarizeReading(emptyReaderCache(), Date.now());
   @State filter: string = '推荐';
   @State query: string = '';
   @State question: string = '为什么天空是蓝色的？';
@@ -30,8 +33,6 @@ struct Index {
   @State aiVoiceHint: boolean = false;
   @State focusMode: boolean = false;
   @State review: string = '';
-  @State pairStep: number = 0;
-  @State connected: boolean = true;
   @State reducedMotion: boolean = false;
   @State child: string = '小雨';
   @State deviceVolume: number = 65;
@@ -51,6 +52,29 @@ struct Index {
     fonts.registerFont({ familyName: FONT_BODY, familySrc: $rawfile('fonts/ResourceHanRoundedCN-Regular.ttf') });
     fonts.registerFont({ familyName: FONT_STRONG, familySrc: $rawfile('fonts/ResourceHanRoundedCN-Bold.ttf') });
     fonts.registerFont({ familyName: FONT_TITLE, familySrc: $rawfile('fonts/ResourceHanRoundedCN-Heavy.ttf') });
+    this.loadReadingSummary();
+  }
+
+  onPageShow(): void {
+    this.loadReadingSummary();
+  }
+
+  private loadReadingSummary(): void {
+    const context = this.getUIContext().getHostContext();
+    if (!context) { return; }
+    try {
+      this.updateReadingSummary(readReaderCache(context.filesDir + '/rfid-reader.json'));
+    } catch (_) {
+      // Keep the last successful summary; the reader panel reports storage errors.
+    }
+  }
+
+  private updateReadingSummary(cache: ReaderCache): void {
+    this.readingSummary = summarizeReading(cache, Date.now());
+  }
+
+  private selectedWeek(): ReadingWeek {
+    return this.growthPeriod === '本周' ? this.readingSummary.currentWeek : this.readingSummary.previousWeek;
   }
 
   aboutToDisappear(): void {
@@ -89,6 +113,7 @@ struct Index {
   }
 
   private switchTab(tab: number): void {
+    if (tab === 0 || tab === 2) { this.loadReadingSummary(); }
     if (this.tab === tab && this.view.length === 0) {
       this.pageScroller.scrollTo({ xOffset: 0, yOffset: 0 });
       return;
@@ -160,20 +185,11 @@ struct Index {
     else if (target === 'read') { this.page = 8; this.setView('read'); }
     else if (target === 'finish') {
       this.transitionPage(() => {
-        this.complete = true;
         this.view = 'finish';
         this.pageScroller.scrollTo({ xOffset: 0, yOffset: 0 });
       });
     }
-    else if (target === 'pair-next') {
-      this.transitionPage(() => {
-        if (this.pairStep < 2) {
-          this.pairStep++;
-        } else { this.connected = true; this.view = ''; this.tab = 4; }
-        this.pageScroller.scrollTo({ xOffset: 0, yOffset: 0 });
-      });
-    } else {
-      if (target === 'pair') { this.pairStep = 0; }
+    else {
       this.setView(target);
     }
   }
@@ -225,7 +241,8 @@ struct Index {
         }.width('48%').alignItems(HorizontalAlign.Start).position({ x: 8, y: 12 });
         Row() {
           Blank().layoutWeight(1);
-          Text('🌞 第8天').fontSize(13).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor('#A66C21')
+          Text(this.readingSummary.streakDays > 0 ? '🌞 连读 ' + this.readingSummary.streakDays + ' 天' : '🌞 共读时光')
+            .fontSize(13).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor('#A66C21')
             .padding({ left: 8, right: 8, top: 5, bottom: 5 }).backgroundColor('#FFF0B9').borderRadius(13);
         }.width('100%').padding({ right: 7 }).position({ x: 0, y: 12 });
       }.height(260).width('100%').clip(true);
@@ -234,14 +251,15 @@ struct Index {
           Image($r('app.media.nav_book')).width(34).height(34).padding(5).backgroundColor('#DBFADF').borderRadius(10);
           Column({ space: 7 }) {
             Text('今日阅读任务').fontSize(15).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK);
-            Progress({ value: this.complete ? 100 : 68, total: 100, type: ProgressType.Linear })
+            Progress({ value: Math.min(this.readingSummary.todayCount, 3), total: 3, type: ProgressType.Linear })
               .width('100%').height(7).color('#43D52B').backgroundColor('#E5F4D8');
           }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-          Text(this.complete ? '3/3' : '2/3').fontSize(16).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK);
+          Text(Math.min(this.readingSummary.todayCount, 3) + '/3').fontSize(16).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold)
+            .fontFamily(FONT_STRONG).fontColor(INK);
           Text('›').fontSize(28).fontFamily('HarmonyOS Sans').fontColor('#16BC4C').width(30).height(30).textAlign(TextAlign.Center)
             .backgroundColor('#DDFFE1').borderRadius(15);
         }.width('100%');
-        Text(this.complete ? '太棒了！已完成今天的阅读任务！' : '再读一个故事，收获今天的阅读星星！')
+        Text(this.readingSummary.todayCount >= 3 ? '今天的共读任务已完成！' : '共读后同步阅读器，更新今日进度。')
           .fontSize(14).fontFamily(FONT_BODY).fontColor('#7E8A9B');
       }.padding(14).width('100%').backgroundColor('#FFFFFF').borderRadius(22).margin({ top: -23 })
         .shadow({ radius: 12, color: '#64984715', offsetY: 4 }).zIndex(2)
@@ -252,6 +270,15 @@ struct Index {
         this.QuickAction('✓', '阅读打卡', '#FFCA26', 'growth');
         this.QuickAction('☺', 'AI互动', '#38CDEA', 'ai');
       }.width('100%');
+      if (this.readingSummary.latestTitle) {
+        Column({ space: 5 }) {
+          Text('最近阅读器记录').fontFamily(FONT_STRONG).fontSize(15).fontColor('#538167');
+          Text(this.readingSummary.latestTitle).fontFamily(FONT_TITLE).fontSize(20).fontColor(INK);
+          Text('末段 ' + this.readingSummary.latestSegment + ' · ' + formatReadingDuration(this.readingSummary.latestDurationMs))
+            .fontFamily(FONT_BODY).fontSize(14).fontColor(MUTED);
+        }.width('100%').padding(14).alignItems(HorizontalAlign.Start).backgroundColor(LIGHT).borderRadius(18)
+          .onClick(() => { this.setView('pair'); });
+      }
       Stack() {
         Image($r('app.media.home_reading_banner')).width('100%').height(112).objectFit(ImageFit.Cover);
         Row() {
@@ -264,7 +291,7 @@ struct Index {
         }.width('100%').padding({ left: 12, right: 8 });
       }.width('100%').height(112).borderRadius(18).clip(true).onClick(() => { this.selected = 0; this.go('read'); });
       Row() {
-        Text('继续共读').fontSize(20).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK);
+        Text('应用内共读').fontSize(20).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK);
         Blank();
         Text('第 ' + this.page + ' / 24 页').fontSize(14).fontFamily(FONT_BODY).fontColor(MUTED);
       }.width('100%');
@@ -461,12 +488,12 @@ struct Index {
       Row({ space: 7 }) {
         ForEach(values, (value: number, i: number) => {
           Column({ space: 6 }) {
-            Blank().width(18).height(value / maximum * 90).backgroundColor('#31D966')
+            Blank().width(18).height(value > 0 ? Math.max(2, value / maximum * 90) : 0).backgroundColor('#31D966')
               .linearGradient({ angle: 0, colors: [['#97F0A2', 0], ['#14CC50', 1]] }).borderRadius({ topLeft: 6, topRight: 6 });
             Text(['周一', '周二', '周三', '周四', '周五', '周六', '周日'][i])
               .fontFamily(FONT_BODY).fontSize(11).fontColor('#9A9FB0');
           }.layoutWeight(1).justifyContent(FlexAlign.End);
-        });
+        }, (value: number, i: number) => i.toString() + ':' + value.toString());
       }.layoutWeight(1).height(112).alignItems(VerticalAlign.Bottom);
     }.width('100%').height(114).alignItems(VerticalAlign.Bottom);
   }
@@ -478,10 +505,10 @@ struct Index {
       Row({ space: 10 }) {
         Image($r('app.media.page_boy')).width(108).height(96).objectFit(ImageFit.Contain);
         Column({ space: 5 }) {
-          Text('太棒了！').fontFamily(FONT_TITLE).fontSize(21).fontColor('#175A37');
-          Text(this.growthPeriod === '本周' ? '你本周阅读时长比上周' : '每一次翻开书，都是进步')
+          Text('共读记录').fontFamily(FONT_TITLE).fontSize(21).fontColor('#175A37');
+          Text('来自当前阅读器 · ' + this.growthPeriod)
             .fontFamily(FONT_BODY).fontSize(15).fontColor('#3B6950');
-          Text(this.growthPeriod === '本周' ? '提升了 60%！' : '继续点亮阅读的小星星吧！')
+          Text(this.selectedWeek().sessionCount > 0 ? '共读 ' + this.selectedWeek().sessionCount + ' 次' : '暂无该周的阅读记录')
             .fontFamily(FONT_STRONG).fontSize(18).fontColor('#126B35');
         }.alignItems(HorizontalAlign.Start).layoutWeight(1);
       }.width('100%').height(96).backgroundColor('#E0FFDD').borderRadius(20).padding({ left: 4, right: 10 });
@@ -500,30 +527,35 @@ struct Index {
           this.BadgeCard('♥', '共读好搭档', '#FFE7EC');
         }.width('100%');
         Image($r('app.media.home_reading_banner')).width('100%').height(135).objectFit(ImageFit.Cover).borderRadius(18);
-        Text('连续共读 7 天，已经收获 8 个好故事。继续保持，下一枚勋章等着你！')
+        Text('勋章样式预览。当前阅读器已连续共读 ' + this.readingSummary.streakDays + ' 天。')
           .fontFamily(FONT_BODY).fontSize(16).fontColor('#487156').lineHeight(27).padding(16)
           .backgroundColor(LIGHT).borderRadius(18);
       } else {
         if (this.growthSection === '阅读数据') {
           Row({ space: 8 }) {
-            this.GrowthMetric('◷', '阅读时长', this.growthPeriod === '本周' ? '128' : '80', '分钟', '↑ +60%', '#18C94E');
-            this.GrowthMetric('▣', '阅读本数', this.growthPeriod === '本周' ? '8' : '6', '本', '↑ +33%', '#45A0F6');
-            this.GrowthMetric('♨', '连续天数', this.growthPeriod === '本周' ? '7' : '5', '天', '↑ +2天', '#FF9E35');
+            this.GrowthMetric('◷', '阅读时长', this.selectedWeek().durationMs > 0 && this.selectedWeek().durationMs < 60000 ?
+              '<1' : Math.round(this.selectedWeek().durationMs / 60000).toString(), '分钟', '#18C94E');
+            this.GrowthMetric('▣', '阅读本数', this.selectedWeek().bookCount.toString(), '本', '#45A0F6');
+            this.GrowthMetric('♨', '有共读记录', this.selectedWeek().activeDays.toString(), '天', '#FF9E35');
           }.width('100%');
           Column({ space: 8 }) {
             Row() {
               Text('阅读趋势').fontFamily(FONT_STRONG).fontSize(17).fontColor(INK).layoutWeight(1);
-              Text(this.growthPeriod === '本周' ? '128分钟' : '80分钟').fontFamily(FONT_STRONG).fontSize(13).fontColor(LIGHT)
+              Text(formatReadingDuration(this.selectedWeek().durationMs)).fontFamily(FONT_STRONG).fontSize(13).fontColor(LIGHT)
                 .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor('#13CB43').borderRadius(13);
             }.width('100%');
-            this.TrendBars(this.growthPeriod === '本周' ? [12, 18, 14, 24, 16, 20, 24] : [8, 12, 10, 15, 10, 12, 13], 30);
+            this.TrendBars(this.selectedWeek().dailyMinutes, this.selectedWeek().chartMaximum);
           }.padding(14).width('100%').backgroundColor(LIGHT).borderRadius(19);
-        }
-        Column({ space: 5 }) {
-          Text('阅读能力雷达').fontFamily(FONT_STRONG).fontSize(17).fontColor(INK).width('100%');
-          ReadingRadar();
-        }.padding({ left: 13, right: 13, top: 13, bottom: 6 }).width('100%').backgroundColor(LIGHT).borderRadius(19);
-        if (this.growthSection === '能力雷达') {
+          if (this.readingSummary.undatedCount > 0) {
+            Text(this.readingSummary.undatedCount + ' 条记录的阅读日期未知，可到设备中心查看。')
+              .fontFamily(FONT_BODY).fontSize(14).fontColor(MUTED);
+          }
+          this.Action('查看和同步阅读器记录', '#D8F3DF', 'pair');
+        } else {
+          Column({ space: 5 }) {
+            Text('阅读能力雷达 · 样式预览').fontFamily(FONT_STRONG).fontSize(17).fontColor(INK).width('100%');
+            ReadingRadar();
+          }.padding({ left: 13, right: 13, top: 13, bottom: 6 }).width('100%').backgroundColor(LIGHT).borderRadius(19);
           Column({ space: 14 }) {
             this.SkillProgress('理解能力', 82, '#21CC5C');
             this.SkillProgress('语言表达', 72, '#5EBAEA');
@@ -537,7 +569,7 @@ struct Index {
   }
 
   @Builder
-  GrowthMetric(icon: string, title: string, value: string, unit: string, change: string, color: string) {
+  GrowthMetric(icon: string, title: string, value: string, unit: string, color: string) {
     Column({ space: 7 }) {
       Row({ space: 4 }) {
         Text(icon).fontFamily(FONT_BODY).fontSize(16).fontColor(color);
@@ -547,7 +579,6 @@ struct Index {
         Text(value).fontFamily(FONT_TITLE).fontSize(27).fontColor(INK);
         Text(unit).fontFamily(FONT_STRONG).fontSize(13).fontColor(INK).margin({ top: 8 });
       }
-      Text(change).fontFamily(FONT_STRONG).fontSize(13).fontColor('#22BC58');
     }.layoutWeight(1).padding({ top: 12, bottom: 12 }).backgroundColor(LIGHT).borderRadius(16);
   }
 
@@ -684,26 +715,19 @@ struct Index {
       }.height(88).width('100%').clip(true);
       Row({ space: 12 }) {
         Image($r('app.media.page_reader')).width(126).height(148).objectFit(ImageFit.Contain)
-          .onClick(() => { this.pairStep = 0; this.setView('pair'); });
+          .onClick(() => { this.setView('pair'); });
         Column({ space: 9 }) {
           Row({ space: 5 }) {
             Text('童阅阅读器').fontFamily(FONT_TITLE).fontSize(20).fontColor(INK).layoutWeight(1);
             Image($r('app.media.page_settings')).width(26).height(26).onClick(() => { this.setView('device-settings'); });
           }.width('100%');
           Text('RFID 故事伙伴').fontFamily(FONT_BODY).fontSize(13).fontColor('#9AA3B3');
-          Text(this.connected ? '● 已连接' : '○ 等待连接').fontFamily(FONT_STRONG).fontSize(14)
-            .fontColor(this.connected ? '#16B74A' : '#D4942A').padding({ left: 9, right: 9, top: 5, bottom: 5 })
-            .backgroundColor(this.connected ? '#E5FAE6' : '#FFF0D5').borderRadius(12);
-          Row({ space: 6 }) {
-            Image($r('app.media.icon_battery')).width(18).height(18);
-            Text('电量 78%').fontFamily(FONT_BODY).fontSize(14).fontColor('#7C8B9D');
-          }
-          Text('12本故事已准备好').fontFamily(FONT_BODY).fontSize(12).fontColor('#8C98A8');
+          Text('连接阅读器、绑定绘本并同步阅读记录').fontFamily(FONT_BODY).fontSize(14).fontColor('#7C8B9D');
         }.layoutWeight(1).alignItems(HorizontalAlign.Start);
       }.padding(12).width('100%').backgroundColor(LIGHT).borderRadius(23)
         .shadow({ radius: 10, color: '#42617A0A', offsetY: 3 });
       Row({ space: 7 }) {
-        this.DeviceShortcut('▣', '内容管理', '12本故事', '#DCF8F4', 'packs');
+        this.DeviceShortcut('▣', '内容管理', '阅读器绘本', '#DCF8F4', 'packs');
         this.DeviceShortcut('♥', '使用管控', this.dailyMinutes + '分钟/日', '#FFE7EB', 'usage');
         this.DeviceShortcut('◷', '专注模式', this.focusMode ? '已开启' : '点击开启', '#EEE7FF', 'focus');
         this.DeviceShortcut('⚙', '设备设置', '声音/提醒', '#E7F2FF', 'device-settings');
@@ -716,20 +740,10 @@ struct Index {
         Image($r('app.media.page_boy')).width(104).height(100).objectFit(ImageFit.Contain);
       }.width('100%').constraintSize({ minHeight: 106 }).padding({ left: 15, right: 4, top: 4, bottom: 4 })
         .backgroundColor('#DDF9D1').borderRadius(20).onClick(() => { this.switchTab(2); });
-      this.SectionHeading('本周设备使用', '查看详情', 'growth');
-      Column({ space: 10 }) {
-        Row() {
-          Column({ space: 3 }) {
-            Text('阅读总时长').fontFamily(FONT_BODY).fontSize(13).fontColor('#8A96A8');
-            Text('3小时20分').fontFamily(FONT_TITLE).fontSize(26).fontColor(INK);
-          }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-          Text('↑ 比上周多20%').fontFamily(FONT_STRONG).fontSize(12).fontColor('#1CBC55');
-        }.width('100%');
-        this.TrendBars([15, 25, 35, 20, 30, 45, 30], 50);
-      }.padding(16).width('100%').backgroundColor(LIGHT).borderRadius(22);
+      this.Setting('◷', '阅读器记录', '查看并同步阅读记录', 'pair');
       this.Setting('♧', '孩子档案', this.child + ' · 点击切换', 'profile');
       this.Setting('◇', '隐私与数据', '由家长管理每一次分享', 'privacy');
-      this.Action(this.connected ? '管理阅读器与绘本标签' : '连接阅读器', '#D8F3DF', 'pair');
+      this.Action('管理阅读器与绘本标签', '#D8F3DF', 'pair');
     }.padding({ left: 16, right: 16, bottom: 24 });
   }
 
@@ -792,20 +806,8 @@ struct Index {
         Text('每天读一点，也给眼睛留出休息时间。').fontFamily(FONT_BODY).fontSize(16).fontColor('#70867B');
         this.Action('保存阅读约定', LIME, 'back');
       } else if (this.view === 'packs') {
-        Text('阅读器里的故事').fontFamily(FONT_TITLE).fontSize(27).fontColor(INK).width('100%');
-        Text('常读的故事，随时都能打开').fontFamily(FONT_BODY).fontSize(16).fontColor('#8492A3').width('100%');
-        ForEach([0, 1, 2], (id: number) => {
-          Row({ space: 12 }) {
-            Column() { this.Cover(id, 75); }.width(54);
-            Column({ space: 6 }) {
-              Text(this.titles[id]).fontFamily(FONT_STRONG).fontSize(18).fontColor(INK);
-              Text('✓ 可以离线共读').fontFamily(FONT_BODY).fontSize(13).fontColor('#28AF56');
-            }.layoutWeight(1).alignItems(HorizontalAlign.Start);
-            Text('›').fontSize(24).fontColor('#8A99A9');
-          }.width('100%').padding(12).backgroundColor(LIGHT).borderRadius(18)
-            .onClick(() => { this.selected = id; this.setView('book'); });
-        });
-        this.Action('添加绘本与标签', '#DFF5DA', 'pair');
+        RfidReaderPanel({ managePacks: true, onCacheChanged: (cache: ReaderCache) => { this.updateReadingSummary(cache); } });
+        this.Action('绑定绘本标签', '#DFF5DA', 'pair');
       } else if (this.view === 'history') {
         Text('对话历史').fontFamily(FONT_TITLE).fontSize(27).fontColor(INK).width('100%');
         ForEach(['为什么天空是蓝色的？', '为什么会下雨？', '星星为什么会发光？'], (question: string) => {
@@ -851,27 +853,12 @@ struct Index {
             .textAlign(TextAlign.Center).lineHeight(27);
           Row({ space: 10 }) {
             this.Metric('+20', '阅读星星', '#FFF0C8');
-            this.Metric('8 天', '连续陪伴', '#E1F5E5');
+            this.Metric(this.readingSummary.streakDays + ' 天', '阅读器连续共读', '#E1F5E5');
           }.width('100%');
           this.Action('回到故事岛', LIME, 'back');
         }.padding(18).width('100%').backgroundColor('#FFF8E2').borderRadius(24);
       } else if (this.view === 'pair') {
-        Row({ space: 8 }) {
-          ForEach([0, 1, 2], (step: number) => {
-            Blank().layoutWeight(1).height(6).backgroundColor(step <= this.pairStep ? LIME : '#E6EAE5').borderRadius(5);
-          });
-        }.width('100%');
-        if (this.pairStep === 2) {
-          this.HappyCharacter();
-        } else {
-          Image($r('app.media.motion_reading_boy')).width(178).height(205).objectFit(ImageFit.Contain).syncLoad(true);
-        }
-        Text(['先叫醒阅读器', '把标签轻轻靠近', '故事已经准备好'][this.pairStep])
-          .fontSize(25).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK).textAlign(TextAlign.Center);
-        Text(['打开阅读器，确认绿色指示灯亮起。', '将绘本背面的 RFID 标签贴近感应区域。', '已将《小熊找朋友》与标签关联。'][this.pairStep])
-          .fontSize(16).fontFamily(FONT_BODY).fontColor('#586B63').lineHeight(28).textAlign(TextAlign.Center);
-        Text('本地演示流程 · 未连接真实硬件').fontSize(13).fontFamily(FONT_BODY).fontColor(MUTED);
-        this.Action(this.pairStep === 2 ? '开始故事之旅' : '下一步', LIME, 'pair-next');
+        RfidReaderPanel({ onCacheChanged: (cache: ReaderCache) => { this.updateReadingSummary(cache); } });
       } else if (this.view === 'profile') {
         Text('谁来打开今天的故事？').fontSize(25).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK).width('100%');
         ForEach(['小雨', '小星'], (name: string, i: number) => {
@@ -889,9 +876,9 @@ struct Index {
           .onClick(() => { this.reducedMotion = !this.reducedMotion; });
       } else {
         HomeWelcomeMascot({ reduced: true, canvasSize: 160 });
-        Text(this.view === 'packs' ? '故事已装进口袋' : (this.view === 'schedule' ? '约好每天的共读时光' : '让阅读器听清这一句'))
+        Text(this.view === 'schedule' ? '约好每天的共读时光' : '让阅读器听清这一句')
           .fontSize(25).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK).textAlign(TextAlign.Center);
-        Text(this.view === 'packs' ? '已安装 12 本离线故事。新增绘本时，请导入知识包并配对标签。' : (this.view === 'schedule' ? '今天 19:30，用 15 分钟陪孩子进入故事。' : '安静地读一句绘本正文，阅读器会尝试找到当前句段。'))
+        Text(this.view === 'schedule' ? '今天 19:30，用 15 分钟陪孩子进入故事。' : '安静地读一句绘本正文，阅读器会尝试找到当前句段。')
           .fontSize(16).fontFamily(FONT_BODY).fontColor('#586B63').lineHeight(28).textAlign(TextAlign.Center);
         this.Action('知道了', '#DFF6E5', 'back');
       }

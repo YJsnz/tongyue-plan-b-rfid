@@ -115,6 +115,38 @@ class RealCtcModelTests(unittest.TestCase):
         if beam_result["status"] == "uncertain":
             self.assertEqual(beam_result["words"], [])
 
+    def test_noise_echo_and_overlapping_question_fixtures(self):
+        samples = self.samples("read-s2.wav")
+        signal_rms = float(self.np.sqrt(self.np.mean(samples * samples)))
+        noise = self.np.random.default_rng(42)
+        cases = []
+        for snr in (12, 6, 0):
+            perturbation = noise.normal(0, signal_rms / (10 ** (snr / 20)), len(samples)).astype(self.np.float32)
+            cases.append((f"white-noise-{snr}dB", self.np.clip(samples + perturbation, -1, 1),
+                          ("matched", "s2", list(range(10)))))
+
+        echo = self.np.zeros(len(samples) + 1600, dtype=self.np.float32)
+        echo[:len(samples)] += samples
+        echo[1600:] += samples * 0.35
+        cases.append(("echo-100ms", echo, ("matched", "s2", list(range(10)))))
+
+        for filename in ("question-free.wav", "question-unknown.wav"):
+            question = self.samples(filename)
+            mixed = samples.copy()
+            start = int(0.8 * 16000)
+            count = min(len(question), len(mixed) - start)
+            mixed[start:start + count] += question[:count] * 0.45
+            cases.append((f"overlap-{filename}", self.np.clip(mixed, -1, 1),
+                          ("uncertain", None, [])))
+
+        for name, audio, expected in cases:
+            with self.subTest(variant=name):
+                finals = [item for item in ctc_events(self.pack, audio, self.acoustic) if item["final"]]
+                self.assertEqual(len(finals), 1)
+                result = finals[0]
+                self.assertEqual((result["status"], result["segmentId"],
+                                  [word["wordIndex"] for word in result["words"]]), expected)
+
     def test_feature_frontend_and_transcript_agree_with_official_runtime(self):
         # Optional reference-only package: pip install sherpa-onnx==2.0.1.
         import sherpa_onnx

@@ -1,0 +1,4 @@
+# Optional PC research backend; not part of the dependency-free ARM MFCC runtime.
+numpy==2.5.4
+onnxruntime==1.31.1
+kaldi-native-fbank==1.23.0

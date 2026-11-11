@@ -1,0 +1,31 @@
+{
+  "bookId": "bear-friends",
+  "version": "1",
+  "title": "小熊找朋友",
+  "language": "zh-CN",
+  "rights": "童阅智伴原创联调示例，录音由项目组自行录制。",
+  "segments": [
+    { "segmentId": "s1", "chapterId": "c1", "storyId": "umbrella",
+      "text": "小熊带着一把伞出门，因为天要下雨了。", "audio": "s1.wav",
+      "words": ["小熊", "带着", "一把", "伞", "出门", "因为", "天", "要", "下雨", "了"] },
+    { "segmentId": "s2", "chapterId": "c1", "storyId": "umbrella",
+      "text": "小熊把伞递给小兔，因为小兔没有带伞。", "audio": "s2.wav",
+      "words": ["小熊", "把", "伞", "递给", "小兔", "因为", "小兔", "没有", "带", "伞"] }
+  ],
+  "faq": [
+    {
+      "segmentId": "s1",
+      "questions": ["它为什么带伞？", "小熊为什么带伞？"],
+      "answer": "因为天要下雨了。",
+      "evidence": "因为天要下雨了",
+      "audio": "a1.wav"
+    },
+    {
+      "segmentId": "s2",
+      "questions": ["它为什么把伞给小兔？"],
+      "answer": "因为小兔没有带伞。",
+      "evidence": "因为小兔没有带伞",
+      "audio": "a2.wav"
+    }
+  ]
+}

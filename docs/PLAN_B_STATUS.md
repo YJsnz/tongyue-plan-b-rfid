@@ -24,9 +24,10 @@
 
 ## 最近一次电脑回归
 
-- 当前 Python 全量回归：79 项，78 项通过、1 项因 Windows 专属录音夹具而跳过，0 项失败。固定版本 CTC 模型的 7 项真实模型检查均运行通过，含 StoryPack 音节 Beam 词位检查、UTF-8 字节回退字的完整词位核验、sherpa-onnx 转写对照，以及数字静音、白噪声、延迟回声和提问叠加变异检查；s1 TTS 的“门”和句末“了”因对齐位置为 PCM 全零窗而保持未确认。合成测试覆盖错误字节序列拒绝和 Beam 跨调用增量续接；WSL 回归使用 ARMv7 定位器和 QEMU，虚拟 PN532/ALSA 整机用例通过。
+- 此前 WSL 全量回归：79 项，78 项通过、1 项因 Windows 专属录音夹具而跳过，0 项失败。固定版本 CTC 模型的 7 项真实模型检查均运行通过，含 StoryPack 音节 Beam 词位检查、UTF-8 字节回退字的完整词位核验、sherpa-onnx 转写对照，以及数字静音、白噪声、延迟回声和提问叠加变异检查；s1 TTS 的“门”和句末“了”因对齐位置为 PCM 全零窗而保持未确认。合成测试覆盖错误字节序列拒绝和 Beam 跨调用增量续接；WSL 回归使用 ARMv7 定位器和 QEMU，虚拟 PN532/ALSA 整机用例通过。
 - ARMv7 定位器本轮 G1/G2 电脑验收：QEMU Cortex-A7 运行 `read-repeat.wav` 与 `silence.wav`，2/2 场景通过；三个合成标注点 3/3 正确（100%），MFCC 特征 RTF `0.01159`，含启动和参考准备的整体 P95 RTF `0.12466`，QEMU 子进程峰值 RSS `24576 KiB`。这是三点生成样本的调试门，不是正式 ≥10 点准确率验收，也不代表 Hi3516 的实时率或内存；完整 JSON 报告位于本机忽略输出 `output/reader-plan-b-qemu-g1-g3-20261111.json`。
 - 十段 G1/G2 补充电脑验收：演示 StoryPack 扩为十个原创段落，分别生成十条不同文本的合成录音；ARMv7/QEMU 10/10 场景及位置点正确，G1/G2 合成调试门通过。扩展包上的重读和静音回归也通过（2/2 场景、3/3 位置点）。MFCC 特征最大 RTF `0.01455`，含启动和参考准备的整体 P95 RTF `0.10657`，QEMU 子进程峰值 RSS `24576 KiB`。这是 Windows 中文 TTS 的电脑定位器验证，不是独立真人录音、儿童准确率或 Hi3516 性能验收；报告位于本机忽略输出 `output/reader-plan-b-qemu-g2-ten-20261111.json`。演示包导入回归 14/14 通过。
+- 本次 Windows Python 全量回归：75 项、0 项失败、16 项跳过。跳过项需要 Linux/POSIX 板端运行时、显式配置的可选 CTC 模型，或原生/QEMU 定位器命令；StoryPack 导入子套件 14/14 通过。
 - 家长端 ArkTS 服务逻辑：本轮复跑 23/23 项通过，含本机复核上传、与阅读器版本合并、旧状态保护及无效轨迹拒绝。
 - DevEco Hvigor `assembleHap` 本轮重新执行成功（33 项任务，15 项执行、18 项已是最新）；项目没有签名配置，因此输出为 unsigned HAP。复核 UI 仍未在模拟器上操作验收：本轮 `hdc list targets` 返回空，DevEco 设备栏显示“无设备”。
 - 2026-11-11：在 HarmonyOS 7 API 26 模拟器上安装正式构建，通过 HDC reverse `8765` 连接电脑 RFID 服务。页面显示“阅读器已连接”；在 ArkUI 中扫描到 UID `0004A12C` 并绑定到 `bear-friends`，绑定保存进模拟阅读器状态。再次向模拟阅读器呈送该 UID 后，它启动对应 StoryPack 和会话，选择 s2 后结束会话；手机增量同步到新会话（3 个轨迹点），原有会话的 2 个轨迹点和 1 条问答证据也仍可见。强制停止、重启应用并重新安装正式 HAP 后缓存保持。过程截图：`output/emulator-test/reader-rfid-incremental.png`。服务端标签呈送是电脑模拟接口，不代表真实 PN532 读卡。本轮 `hdc list targets` 返回空，DevEco 显示无可用设备，因此未继续 UI 操作。

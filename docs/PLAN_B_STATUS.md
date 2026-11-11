@@ -32,6 +32,6 @@
 - 家长端跨端电脑联调：新增端到端用例通过。两份独立 ArkTS `RfidReader` 服务实例通过 HTTP 连接真实 Python 阅读器处理器，覆盖家长 A 提交“位置不符”、从磁盘重载阅读器状态、家长 B 读取并更新为“已确认”、家长 A 合并新版本；原始轨迹仍为 `matched`。这验证了服务协议、合并逻辑和状态持久化，不运行 ArkUI，也不代表两部鸿蒙设备的 UI 操作验收。
 - DevEco Hvigor `assembleHap` 最近一次执行成功（33 项任务，15 项执行、18 项已是最新）；项目没有签名配置，因此输出为 unsigned HAP。此前已在 HarmonyOS 模拟器验证基本配对与同步流程。本轮使用 SDK 自带的 `D:\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe` 查询，仅发现 COM3/COM4/COM7/COM8 的 `UART Ready unknown` 项，没有 HarmonyOS 模拟器目标，因此新复核 UI 仍未能继续操作验收。
 - 2026-11-11：在 HarmonyOS 7 API 26 模拟器上安装正式构建，通过 HDC reverse `8765` 连接电脑 RFID 服务。页面显示“阅读器已连接”；在 ArkUI 中扫描到 UID `0004A12C` 并绑定到 `bear-friends`，绑定保存进模拟阅读器状态。再次向模拟阅读器呈送该 UID 后，它启动对应 StoryPack 和会话，选择 s2 后结束会话；手机增量同步到新会话（3 个轨迹点），原有会话的 2 个轨迹点和 1 条问答证据也仍可见。强制停止、重启应用并重新安装正式 HAP 后缓存保持。过程截图：`output/emulator-test/reader-rfid-incremental.png`。服务端标签呈送是电脑模拟接口，不代表真实 PN532 读卡；当次检查 `hdc list targets` 返回空，DevEco 显示无可用设备，因此未继续 UI 操作。
-- ARMv7 交付包已重新生成，包含阅读轨迹模块和对应检查脚本；不包含 CTC 模型及其可选运行依赖。
+- ARMv7 交付包本轮重新生成，定位器确认为静态 ARM EABI5 ELF；解包后在交付目录运行 G4 分析器自检，4/4 通过。包内包含阅读轨迹与 G4 自检脚本，不包含 CTC 模型及其可选运行依赖；仿真构建不替代目标板 ABI 和外设验收。
 
 后续软件工作按 B-T02/03 的书内细粒度对齐与真实音频异常集、B-T06 的双家长端 UI 联合操作和家长反馈闭环推进。复核同步的服务协议、电脑模拟器和鸿蒙服务逻辑已有回归证据；鸿蒙 UI 手动操作与真实终端联调仍需设备在线后完成。实际开发板到手后，再依 `RFID_MVP.md` 做部署预检和 G0—G5 验收。目标保持完整，不以目前的句段原型替代这些未完成项。

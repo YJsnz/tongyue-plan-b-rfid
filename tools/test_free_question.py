@@ -66,6 +66,46 @@ class FreeQuestionTests(unittest.TestCase):
         self.assertEqual(extractive_answer(index, "s1", "what happened to the bear?")["status"], "unsupported")
         self.assertEqual(extractive_answer(index, "s1", None)["status"], "unsupported")
 
+    def test_conversational_question_fillers_keep_the_grounded_topic(self):
+        source = "小熊带着一把伞出门，因为天要下雨了。"
+        index = self.index(source)
+        for question in (
+            "小熊出门的时候带了什么东西？",
+            "小熊出门带的那个东西是什么呀？",
+            "小熊出门时手里拿着啥？",
+        ):
+            with self.subTest(question=question):
+                result = extractive_answer(index, "s1", question)
+                self.assertEqual(result["status"], "answered")
+                self.assertEqual(result["evidence"], source)
+
+    def test_property_questions_need_matching_evidence_in_the_quote(self):
+        umbrella = self.index("小熊带着一把伞出门，因为天要下雨了。")
+        self.assertEqual(extractive_answer(umbrella, "s1", "小熊带了什么颜色的伞？")["status"], "unsupported")
+        self.assertEqual(extractive_answer(umbrella, "s1", "小熊为什么带伞？")["status"], "answered")
+        self.assertEqual(extractive_answer(umbrella, "s1", "小熊什么时候出门？")["status"], "unsupported")
+
+        color = self.index("小熊戴着一顶红色的帽子。")
+        result = extractive_answer(color, "s1", "小熊帽子的颜色是什么？")
+        self.assertEqual(result["status"], "answered")
+        self.assertIn("红色", result["evidence"])
+
+    def test_reason_quantity_time_and_place_questions_require_matching_clues(self):
+        self.assertEqual(extractive_answer(self.index("小熊带着一把伞出门。"), "s1", "小熊为什么带伞？")["status"],
+                         "unsupported")
+        self.assertEqual(extractive_answer(self.index("小熊摘了三朵花。"), "s1", "小熊摘了几朵花？")["status"],
+                         "answered")
+        self.assertEqual(extractive_answer(self.index("小熊和小兔摘下三朵花。"), "s1", "他们一共摘了多少朵花？")["status"],
+                         "answered")
+        self.assertEqual(extractive_answer(self.index("小熊抓到三只蝴蝶，还拿着一把伞。"), "s1", "小熊摘了几朵花？")["status"],
+                         "unsupported")
+        self.assertEqual(extractive_answer(self.index("周一早上，小熊出门。"), "s1", "小熊什么时候出门？")["status"],
+                         "answered")
+        self.assertEqual(extractive_answer(self.index("小熊在树林里等小兔。"), "s1", "小熊在什么地方等小兔？")["status"],
+                         "answered")
+        self.assertEqual(extractive_answer(self.index("小熊现在喜欢玩耍。"), "s1", "小熊在什么地方玩？")["status"],
+                         "unsupported")
+
 
 if __name__ == "__main__":
     unittest.main()

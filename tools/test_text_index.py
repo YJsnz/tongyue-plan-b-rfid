@@ -73,7 +73,7 @@ class TextIndexTests(unittest.TestCase):
 
     def test_opt_in_free_question_returns_a_verbatim_current_segment_excerpt(self):
         pack = self.compile()
-        result = pack.answer_free("s1", "小熊为什么会带伞？")
+        result = pack.answer_free("s1", "小熊会带什么？")
         self.assertEqual(result["status"], "answered")
         self.assertEqual(result["question"], "原文检索提问")
         self.assertEqual(result["evidence"], "小熊带着伞。")

@@ -69,7 +69,7 @@ class ParentReviewEndToEndTests(unittest.TestCase):
     def run_parent(self, phase):
         result = subprocess.run(
             [NODE, str(ROOT / "tools/test_parent_review_e2e.cjs"), TYPESCRIPT, self.address, phase],
-            cwd=ROOT, capture_output=True, text=True, timeout=15, check=False)
+            cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=15, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result.stdout)
 

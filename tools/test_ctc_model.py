@@ -66,12 +66,18 @@ class RealCtcModelTests(unittest.TestCase):
         result = tracker._syllable_beam(scores, 0.0)
 
         self.assertEqual((result["status"], result["segmentId"], result["wordIndex"]),
-                         ("matched", "s2", 8))
+                         ("matched", "s2", 9))
         self.assertEqual([word["text"] for word in result["words"]],
-                         ["小熊", "把", "递给", "因为", "没有", "带"])
+                         ["小熊", "把", "伞", "递给", "小兔", "因为", "小兔", "没有", "带", "伞"])
         record = next(record for record in index.segments if record["segmentId"] == result["segmentId"])
-        self.assertTrue(all(word["text"] == record["text"][word["textStart"]:word["textEnd"]]
-                            for word in result["words"]))
+        previous_end = 0.0
+        for word in result["words"]:
+            self.assertEqual(word["text"], record["text"][word["textStart"]:word["textEnd"]])
+            self.assertGreaterEqual(word["startSeconds"], previous_end)
+            self.assertLess(word["startSeconds"], word["endSeconds"])
+            self.assertLessEqual(word["endSeconds"], len(samples) / 16000)
+            self.assertGreaterEqual(word["meanPosterior"], 0.05)
+            previous_end = word["endSeconds"]
 
     def test_feature_frontend_and_transcript_agree_with_official_runtime(self):
         # Optional reference-only package: pip install sherpa-onnx==2.0.1.

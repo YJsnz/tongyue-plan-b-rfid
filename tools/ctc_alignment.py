@@ -220,13 +220,19 @@ class CtcBookTracker:
                     pinyin = toneless(token["pinyin"])
                     text_start, text_end = token["textStart"], token["textEnd"]
                     source_char = record["text"][text_start:text_end]
-                    token_ids = getattr(acoustic, "token_ids", getattr(acoustic, "ids", {}))
+                    source_labels = []
+                    if len(source_char) == 1:
+                        if hasattr(acoustic, "alignment_tokens"):
+                            source_labels = acoustic.alignment_tokens(source_char)[0]
+                        else:
+                            source_labels = acoustic.encode_text(source_char)
                     node_index = len(self.syllable_nodes)
                     key = (segment_index, token["wordIndex"])
                     node = {"segmentIndex": segment_index, "segmentId": record["segmentId"],
                             "wordIndex": token["wordIndex"], "textStart": text_start, "textEnd": text_end,
                             "pinyin": pinyin, "labels": self.syllable_label_ids.get(pinyin, []),
-                            "sourceLabel": token_ids.get(source_char) if len(source_char) == 1 else None,
+                            "sourceLabels": source_labels,
+                            "sourceLabel": source_labels[0] if len(source_labels) == 1 else None,
                             "wordStart": key not in self.syllable_words}
                     self.syllable_nodes.append(node)
                     self.syllable_words.setdefault(key, []).append(node_index)
@@ -324,6 +330,7 @@ class CtcBookTracker:
         anchor = beam_state["anchor"]
         left = beam_state["left"]
         window, width = beam_state["window"], beam_state["width"]
+        right = left + width
         frame_seconds = self.acoustic.frame_seconds
         end = start_seconds + len(scores) * frame_seconds
         end = end if end_seconds is None else min(end, end_seconds)
@@ -420,7 +427,7 @@ class CtcBookTracker:
             path_state = int(beam_state["history"][frame][path_state])
 
         observed = set()
-        exact_frames = {}
+        exact_evidence = {}
         for frame, local_index in enumerate(path):
             if local_index < 0 or blank_frames[frame]:
                 continue
@@ -434,7 +441,74 @@ class CtcBookTracker:
             if (source_label is not None and source_label in labels and
                     labels[int(np.argmax(scores[frame, labels]))] == source_label and
                     scores[frame, source_label] >= math.log(0.05)):
-                exact_frames.setdefault(node_index, []).append(frame)
+                exact_evidence.setdefault(node_index, []).append((frame, source_label))
+
+        segment_index = best_key[0]
+        candidate_end_node = self.syllable_words[best_key][-1]
+        byte_groups = []
+        current_group = []
+        for node_index in range(left, min(candidate_end_node + 1, right)):
+            node = self.syllable_nodes[node_index]
+            has_byte_source = (node["segmentIndex"] == segment_index and
+                               node["wordIndex"] <= best_key[1] and len(node["sourceLabels"]) > 1)
+            if has_byte_source:
+                if current_group and node_index != current_group[-1] + 1:
+                    byte_groups.append(current_group)
+                    current_group = []
+                current_group.append(node_index)
+            elif current_group:
+                byte_groups.append(current_group)
+                current_group = []
+        if current_group:
+            byte_groups.append(current_group)
+
+        usable_frames = min(len(scores), max(0, math.ceil((end - start_seconds) / frame_seconds)))
+        for group in byte_groups:
+            previous_anchor = max((index for index in exact_evidence if index < group[0]), default=None)
+            next_anchor = min((index for index in exact_evidence
+                               if group[-1] < index <= candidate_end_node), default=None)
+            if previous_anchor is None and next_anchor is None:
+                continue
+            begin = (max(frame for frame, _ in exact_evidence[previous_anchor]) + 1
+                     if previous_anchor is not None else 0)
+            finish = (min(frame for frame, _ in exact_evidence[next_anchor])
+                      if next_anchor is not None else usable_frames)
+            begin, finish = max(0, begin), min(usable_frames, finish)
+            source_labels, label_ranges = [], {}
+            for node_index in group:
+                label_start = len(source_labels)
+                source_labels.extend(self.syllable_nodes[node_index]["sourceLabels"])
+                label_ranges[node_index] = (label_start, len(source_labels))
+            if finish <= begin or not source_labels:
+                continue
+            try:
+                aligned_bytes = forced_align(scores[begin:finish], source_labels,
+                                             self.acoustic.blank_id, frame_seconds)
+            except ValueError:
+                continue
+            group_evidence, valid_group = {}, True
+            for node_index, (label_start, label_end) in label_ranges.items():
+                pairs = []
+                for label_index in range(label_start, label_end):
+                    token = aligned_bytes["tokens"][label_index]
+                    first_frame = begin + round(token["startSeconds"] / frame_seconds)
+                    last_frame = begin + round(token["endSeconds"] / frame_seconds)
+                    token_frames = range(max(begin, first_frame), min(finish, last_frame))
+                    if (token["meanPosterior"] < 0.05 or not any(
+                            int(np.argmax(scores[frame])) == source_labels[label_index] and
+                            scores[frame, source_labels[label_index]] >= math.log(0.05)
+                            for frame in token_frames)):
+                        valid_group = False
+                        break
+                    pairs.extend((frame, source_labels[label_index]) for frame in token_frames)
+                if not valid_group:
+                    break
+                group_evidence[node_index] = pairs
+            if valid_group:
+                for node_index, pairs in group_evidence.items():
+                    observed.add(node_index)
+                    exact_evidence[node_index] = pairs
+
         if len(observed) < MIN_SYLLABLE_BEAM_HITS:
             return None
         if margin < MIN_SYLLABLE_BEAM_MARGIN:
@@ -442,15 +516,14 @@ class CtcBookTracker:
                          reason="ambiguous_syllable_alignment", final=final,
                          wordIndex=anchor[1], syllableBeamGap=margin)
 
-        segment_index = best_key[0]
         record = self.references[segment_index][1]
         words = []
         for (word_segment, word_index), node_indices in sorted(self.syllable_words.items()):
             if (word_segment != segment_index or word_index > best_key[1] or
-                    any(index not in observed or index not in exact_frames for index in node_indices)):
+                    any(index not in observed or index not in exact_evidence for index in node_indices)):
                 continue
-            start_frame = min(frame for index in node_indices for frame in exact_frames[index])
-            end_frame = max(frame for index in node_indices for frame in exact_frames[index])
+            start_frame = min(frame for index in node_indices for frame, _ in exact_evidence[index])
+            end_frame = max(frame for index in node_indices for frame, _ in exact_evidence[index])
             text_start, text_end, _ = record["words"][word_index]
             word_start_seconds = start_seconds + start_frame * frame_seconds
             word_end_seconds = start_seconds + (end_frame + 1) * frame_seconds
@@ -460,8 +533,8 @@ class CtcBookTracker:
                           "text": record["text"][text_start:text_end],
                           "startSeconds": word_start_seconds, "endSeconds": word_end_seconds,
                           "meanPosterior": float(np.mean([
-                              np.exp(scores[frame, self.syllable_nodes[index]["sourceLabel"]])
-                              for index in node_indices for frame in exact_frames[index]]))})
+                              np.exp(scores[frame, label])
+                              for index in node_indices for frame, label in exact_evidence[index]]))})
         if not words:
             return event("ctc", "uncertain", anchor[0], start_seconds, end,
                          reason="incomplete_syllable_word", final=final,

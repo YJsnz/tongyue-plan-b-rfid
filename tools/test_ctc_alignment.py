@@ -325,14 +325,17 @@ class CtcAlignmentTests(unittest.TestCase):
 
             def __init__(self):
                 self.token_ids = {"甲": 1, "乙": 2, "丙": 3, "丁": 4,
-                                  "小": 10, "筱": 11, "熊": 20, "把": 30, "伞": 40}
+                                  "小": 10, "筱": 11, "熊": 20, "把": 30}
+                self.byte_fallback = {"伞": [40, 41, 42]}
                 self.syllable_label_ids = {"jia": [41, 1], "yi": [42, 2],
                                            "bing": [43, 3], "ding": [44, 4],
                                            "xiao": [11, 10], "xiong": [21, 20],
-                                           "ba": [31, 30], "san": [45, 40]}
+                                           "ba": [31, 30], "san": [45]}
 
             def encode_text(self, text):
-                return [self.token_ids[char] for char in text]
+                return [label for char in text
+                        for label in (self.byte_fallback[char] if char in self.byte_fallback
+                                      else [self.token_ids[char]])]
 
         def scores_for(labels):
             values = np.full((len(labels), 46), 0.001, dtype=np.float32)
@@ -343,7 +346,7 @@ class CtcAlignmentTests(unittest.TestCase):
         index, acoustic = SyllableIndex(), SyllableAcoustic()
         tracker = CtcBookTracker(index, acoustic)
         tracker.final_position = ("s1", 3)
-        full_scores = scores_for([10, 10, 20, 20, 30, 30, 40, 40])
+        full_scores = scores_for([10, 10, 20, 20, 30, 30, 45, 40, 41, 42])
         self.assertIsNone(tracker._syllable_beam(full_scores[:4], 0.0, final=False))
         state = tracker.syllable_beam_state
         self.assertEqual(state["processed"], 4)
@@ -362,10 +365,10 @@ class CtcAlignmentTests(unittest.TestCase):
 
         tracker = CtcBookTracker(index, acoustic)
         tracker.final_position = ("s1", 3)
-        homophone = tracker._syllable_beam(scores_for([11, 11, 20, 20, 30, 30, 40, 40]), 0.0)
-        self.assertEqual(homophone["wordIndex"], 2)
-        self.assertEqual([word["text"] for word in homophone["words"]], ["把", "伞"])
-        self.assertEqual([word["wordIndex"] for word in homophone["words"]], [1, 2])
+        wrong_bytes = tracker._syllable_beam(scores_for([11, 11, 20, 20, 30, 30, 45, 40, 41, 43]), 0.0)
+        self.assertEqual(wrong_bytes["wordIndex"], 1)
+        self.assertEqual([word["text"] for word in wrong_bytes["words"]], ["把"])
+        self.assertEqual([word["wordIndex"] for word in wrong_bytes["words"]], [1])
 
 
 if __name__ == "__main__":

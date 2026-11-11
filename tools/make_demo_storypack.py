@@ -105,6 +105,10 @@ def generate(output, voice, fixture_voice, locator):
     speech(fixtures, "question-free.wav", "小熊出门的时候带了什么东西？", fixture=True, rate=1)
     speech(fixtures, "read-s1.wav", book["segments"][0]["text"], fixture=True, rate=1)
     speech(fixtures, "read-s2.wav", book["segments"][1]["text"], fixture=True, rate=-1)
+    fixture_rates = (-2, -1, 0, 1, 2)
+    for index, segment in enumerate(book["segments"]):
+        speech(fixtures, f"position-{index + 1:02}-clip.wav", segment["text"], fixture=True,
+               rate=fixture_rates[index % len(fixture_rates)])
 
     command = base64.b64encode(SYNTHESIZE.encode("utf-16-le")).decode("ascii")
     completed = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", command],
@@ -122,6 +126,15 @@ def generate(output, voice, fixture_voice, locator):
     combine(fixtures / "read-repeat.wav", [fixtures / "read-s1.wav", None, fixtures / "read-s1.wav", None,
                                          fixtures / "read-s2.wav", None])
     combine(fixtures / "silence.wav", [None, None])
+    position_cases = []
+    for index, segment in enumerate(book["segments"]):
+        recording = f"position-{index + 1:02}.wav"
+        clip = fixtures / f"position-{index + 1:02}-clip.wav"
+        combine(fixtures / recording, [clip, None])
+        position_cases.append({"recording": recording, "expected": [["matched", segment["segmentId"]]],
+                               "positionChecks": [[int(duration_ms(fixtures / recording) - 200),
+                                                   segment["segmentId"]]]})
+    write_json(fixtures / "cases-g2.json", position_cases)
     first_ms = duration_ms(fixtures / "read-s1.wav")
     second_ms = duration_ms(fixtures / "read-s2.wav")
     write_json(fixtures / "cases.json", [

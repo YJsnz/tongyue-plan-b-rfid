@@ -126,7 +126,25 @@ python -B .\tools\make_demo_storypack.py .\output\rfid-demo
 
 要生成带声学索引的联调包，可追加 `--locator <电脑端 locate_wav v2或更新版本>`，并选择新的输出目录，例如 `output/rfid-demo-indexed`。带索引的包需要新版 ARM 定位器。
 
-生成目录包含 `bear-friends-demo-pack.tar.gz`、已编译的 `packs/bear-friends/`、可编辑源素材和 `fixtures/`。上板时在运行目录解压绘本包，得到 `packs/bear-friends`。若板端已有同名绘本包，使用独立的联调目录并让 `--packs` 指向它。绘本包含两个段落、带原文证据的问答和录制好的提示。问题可试「它为什么带伞？」和「它为什么把伞给小兔？」。
+生成目录包含 `bear-friends-demo-pack.tar.gz`、已编译的 `packs/bear-friends/`、可编辑源素材和 `fixtures/`。上板时在运行目录解压绘本包，得到 `packs/bear-friends`。若板端已有同名绘本包，使用独立的联调目录并让 `--packs` 指向它。绘本包含十个原创段落、带原文证据的问答和录制好的提示。问题可试「它为什么带伞？」和「它为什么把伞给小兔？」。生成器还会为十个段落分别生成独立的合成朗读样本 `position-01.wav` 至 `position-10.wav`，及 `cases-g2.json` 标注，用于电脑 G1/G2 调试；这些样本不代表儿童录音或正式准确率验收。
+
+在 Windows 项目根目录生成独立的十段索引包：
+
+```powershell
+python -B .\tools\make_demo_storypack.py .\output\rfid-demo-g2 `
+  --locator .\output\reader-pc\locate_wav.exe
+```
+
+如需用 ARMv7 定位器在 QEMU 下运行这十条 G2 调试样本，可在 WSL 项目根目录运行：
+
+```sh
+python3 -B tools/bench_locator.py --locator output/reader-arm-current/locate_wav \
+  --packs output/rfid-demo-g2/packs --book-id bear-friends \
+  --cases output/rfid-demo-g2/fixtures/cases-g2.json \
+  --runner qemu-arm-static --runner-arg=-cpu --runner-arg=cortex-a7 --acceptance-gates
+```
+
+命令要求先生成带索引的十段演示包，并在 `output/reader-arm-current/` 放置 ARMv7 定位器。G1/G2 的通过结果仅说明电脑合成样本调试通过；正式定位准确率仍需实际录音的独立标注，板端性能需在 Hi3516 上另测。
 
 `fixtures/cases.json` 标注了跟读、重读和静音的预期结果。`DEMO-INFO.json` 记录参考音和待测音使用的合成声线。默认待测音由同一个中文声线用不同语速重新合成，可用 `--fixture-voice` 指定另一个已安装的声线。合成音只用于联调，真实儿童准确率和板端性能须用独立样本验收。
 

@@ -7,6 +7,9 @@ a pronunciation assessment and never confirms substituted source characters.
 
 import math
 
+MAX_FRAGMENT_STITCH_GAP_SECONDS = 1.5
+MAX_FRAGMENT_STITCH_FRAMES = 200
+
 
 def readable(text):
     return "".join(char for char in text if char.isalnum())
@@ -137,6 +140,7 @@ class CtcBookTracker:
         self.index, self.acoustic = text_index, acoustic
         self.position = None
         self.final_position = None
+        self.pending_fragment = None
         self.references = []
         for segment_index, record in enumerate(text_index.segments):
             offsets = [index for index, char in enumerate(record["text"]) if char.isalnum()]
@@ -146,7 +150,59 @@ class CtcBookTracker:
             acoustic.encode_text(normalized)
             self.references.append((segment_index, record, normalized, offsets))
 
+    def _stitch_pending(self, scores, start_seconds):
+        if self.pending_fragment is None or not len(scores):
+            return None
+        import numpy as np
+        previous_scores, previous_start = self.pending_fragment
+        frame_seconds = self.acoustic.frame_seconds
+        previous_end = previous_start + len(previous_scores) * frame_seconds
+        gap_seconds = start_seconds - previous_end
+        if gap_seconds < -frame_seconds or gap_seconds > MAX_FRAGMENT_STITCH_GAP_SECONDS:
+            self.pending_fragment = None
+            return None
+        gap_frames = max(0, round(max(0, gap_seconds) / frame_seconds))
+        total_frames = len(previous_scores) + gap_frames + len(scores)
+        if total_frames > MAX_FRAGMENT_STITCH_FRAMES:
+            self.pending_fragment = None
+            return None
+        if gap_frames:
+            silence = np.full((gap_frames, scores.shape[1]), -50.0, dtype=scores.dtype)
+            silence[:, self.acoustic.blank_id] = 0.0
+            scores = np.concatenate((previous_scores, silence, scores), axis=0)
+        else:
+            scores = np.concatenate((previous_scores, scores), axis=0)
+        return scores, previous_start
+
     def locate(self, scores, start_seconds=0, *, final=True, end_seconds=None):
+        stitched = self._stitch_pending(scores, start_seconds)
+        if stitched is not None:
+            combined, combined_start = stitched
+            if not final:
+                return self._locate_once(combined, combined_start, final=False, end_seconds=end_seconds)
+            combined_text = readable(self.acoustic.decode_ids(
+                greedy_ids(combined, self.acoustic.blank_id)))
+            if len(combined_text) < 4:
+                self.pending_fragment = (combined.copy(), combined_start)
+                return self._locate_once(combined, combined_start, final=True, end_seconds=end_seconds)
+            result = self._locate_once(combined, combined_start, final=True, end_seconds=end_seconds)
+            self.pending_fragment = None
+            if result["status"] != "uncertain":
+                return result
+            # A short unrelated fragment must not prevent a clean new utterance
+            # from matching on its own.
+            result = self._locate_once(scores, start_seconds, final=True, end_seconds=end_seconds)
+            if result.get("reason") == "insufficient_context" and len(scores) <= MAX_FRAGMENT_STITCH_FRAMES:
+                self.pending_fragment = (scores.copy(), start_seconds)
+            return result
+
+        result = self._locate_once(scores, start_seconds, final=final, end_seconds=end_seconds)
+        if (final and result.get("reason") == "insufficient_context" and
+                len(scores) <= MAX_FRAGMENT_STITCH_FRAMES):
+            self.pending_fragment = (scores.copy(), start_seconds)
+        return result
+
+    def _locate_once(self, scores, start_seconds=0, *, final=True, end_seconds=None):
         end = start_seconds + len(scores) * self.acoustic.frame_seconds
         end = end if end_seconds is None else min(end, end_seconds)
         old_segment = self.position[0] if self.position else None

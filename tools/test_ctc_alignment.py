@@ -79,6 +79,40 @@ class CtcAlignmentTests(unittest.TestCase):
         self.assertTrue(all(word["startSeconds"] < word["endSeconds"] for word in final["words"]))
         self.assertEqual([(word["textStart"], word["textEnd"]) for word in final["words"]], [(0, 2), (2, 4), (4, 6), (6, 8)])
 
+    def test_short_fragments_stitch_across_a_brief_pause_and_recover_the_whole_phrase(self):
+        first_text, second_text = self.texts[0][:3], self.texts[0][3:]
+        first_scores = self.acoustic.scores(first_text)
+        first = self.tracker.locate(first_scores, start_seconds=1.0)
+        self.assertEqual((first["status"], first["reason"]), ("uncertain", "insufficient_context"))
+        first_end = 1.0 + len(first_scores) * self.acoustic.frame_seconds
+
+        result = self.tracker.locate(self.acoustic.scores(second_text), start_seconds=first_end + 0.8)
+        self.assertEqual((result["status"], result["segmentId"], result["wordIndex"]), ("matched", "s1", 3))
+        self.assertEqual([word["text"] for word in result["words"]], ["小熊", "带着", "雨伞", "出门"])
+        self.assertEqual(result["startSeconds"], 1.0)
+        self.assertAlmostEqual(result["endSeconds"], first_end + 0.8 +
+                               len(self.acoustic.scores(second_text)) * self.acoustic.frame_seconds)
+        self.assertIsNone(self.tracker.pending_fragment)
+
+    def test_stitch_buffer_expires_after_a_long_pause(self):
+        first_scores = self.acoustic.scores(self.texts[0][:3])
+        self.tracker.locate(first_scores, start_seconds=0)
+        later_start = len(first_scores) * self.acoustic.frame_seconds + 1.6
+        result = self.tracker.locate(self.acoustic.scores(self.texts[1]), start_seconds=later_start)
+        self.assertEqual((result["status"], result["segmentId"], result["alignmentMode"]),
+                         ("matched", "s2", "exact"))
+        self.assertEqual(result["startSeconds"], later_start)
+        self.assertIsNone(self.tracker.pending_fragment)
+
+    def test_unrelated_short_fragment_falls_back_to_a_clean_exact_utterance(self):
+        foreign_scores = self.acoustic.scores("今天午")
+        self.tracker.locate(foreign_scores, start_seconds=0)
+        next_start = len(foreign_scores) * self.acoustic.frame_seconds + 0.4
+        result = self.tracker.locate(self.acoustic.scores(self.texts[0]), start_seconds=next_start)
+        self.assertEqual((result["status"], result["segmentId"], result["alignmentMode"]),
+                         ("matched", "s1", "exact"))
+        self.assertEqual(result["startSeconds"], next_start)
+
     def test_anomaly_repeat_retains_observed_word(self):
         self.locate(self.texts[0])
         result = self.locate(self.texts[0][:4])
@@ -189,6 +223,27 @@ class CtcAlignmentTests(unittest.TestCase):
         self.assertEqual(completed, [("matched", "s1"), ("repeated", "s1"), ("matched", "s2")])
         self.assertTrue(any(not item["final"] and item["words"] for item in events))
         self.assertTrue(all(item["endSeconds"] <= len(scores) * 0.04 for item in events))
+
+    def test_streaming_pause_split_uses_pending_short_fragment_for_position(self):
+        first = self.acoustic.scores(self.texts[0][:3])
+        second = self.acoustic.scores(self.texts[0][3:])
+        scores = np.concatenate((first, second))
+        chunks = [scores[start:start + 8] for start in range(0, len(scores), 8)]
+        acoustic = self.acoustic
+
+        class Stream:
+            def accept(self, samples, final=False):
+                return chunks.pop(0) if chunks else np.empty((0, len(acoustic.tokens)))
+
+        acoustic.new_stream = Stream
+        pack = type("Pack", (), {"text_index": lambda _: FakeIndex(self.texts)})()
+        sample_count = len(scores) * round(acoustic.frame_seconds * 16000)
+        events = list(ctc_events(pack, np.zeros(sample_count), acoustic))
+        final_events = [item for item in events if item["final"]]
+        self.assertEqual([item["status"] for item in final_events], ["uncertain", "matched"])
+        self.assertEqual((final_events[-1]["segmentId"], final_events[-1]["wordIndex"]), ("s1", 3))
+        self.assertEqual([word["text"] for word in final_events[-1]["words"]],
+                         ["小熊", "带着", "雨伞", "出门"])
 
     def test_word_initial_aliases_and_rare_character_bytes_preserve_offsets(self):
         acoustic = ZipformerCtc.__new__(ZipformerCtc)

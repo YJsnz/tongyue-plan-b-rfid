@@ -368,6 +368,8 @@ G4 的研发目标是已知 FAQ 的首个有效回答音频 P95 不超过 2 秒�
 
 在板端或电脑运行 `python3 tools/bench_question_latency.py --cases ./g4-cases.json > g4-report.json`。工具使用 10 毫秒采样窗和至少 30 毫秒的连续活动来定位声段。根据试录底噪，可分别用 `--question-dbfs` 和 `--answer-dbfs` 调整阈值。默认要求至少 20 次独立试验，每次都要检测到正确回答，漏答或错误回答不能通过丢弃该条记录来达标。`captureKind: synthetic` 仅用于验证分析流程。实际验收需保留硬件版本、回采和人工确认结果。
 
+运行 `python3 -B -m unittest discover -s tools -p test_question_latency.py -v` 可执行分析器的电脑自检。测试用可控立体声波形检查 P95、漏答、提前播音和重复录音处理；这些自检只证明分析逻辑，不证明 Hi3516 的扬声器真实出声延迟。实际 G4 仍需按上文完成硬件回采。
+
 ### 留存两小时持续采音报告
 
 板端以 `--continuous` 启动阅读器，将标准输出和错误追加到同一个 `reader.log`。刷已绑定绘本，等首段播放完成并看到 `audio: listening`，然后在另一个终端启动观察。将下面的 `1234` 替换为实际 `board_reader.py` 进程 PID。观察期间保持同一个共读会话，避免主动暂停或播音。

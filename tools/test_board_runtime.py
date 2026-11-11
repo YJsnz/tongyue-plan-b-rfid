@@ -157,7 +157,8 @@ class BoardRuntimeIntegrationTests(unittest.TestCase):
         self.start_reader()
 
     def make_book(self):
-        for name, frequency in (("s1", 400), ("s2", 1800), ("q1", 700), ("q2", 2500)):
+        for name, frequency in (("s1", 400), ("s2", 1800), ("q1", 700), ("q2", 2500),
+                                ("foreign", 3300)):
             pcm = b"".join(struct.pack("<h", round(3000 * math.sin(i * math.tau * frequency / 16000)))
                            for i in range(16000)) + b"\0" * 25600
             with wave.open(str(self.root / (name + ".wav")), "wb") as audio:
@@ -174,16 +175,16 @@ class BoardRuntimeIntegrationTests(unittest.TestCase):
                      "evidence": "因为小兔没有带伞", "audio": "s2.wav"}],
             "voiceQuestions": [{"question": "它为什么带伞？", "audio": "q1.wav"},
                                {"question": self.question, "audio": "q2.wav"}],
-            "voicePrompts": {"questionReady": "q1.wav"}})
+            "voicePrompts": {"questionReady": "q1.wav", "needsPositionConfirmation": "q1.wav"}})
         compile_pack(self.root / "book.json", self.root / "authored", self.locator)
         from storypack import StoryPack
         self.archive = self.root / "test-book.tar.gz"
         export(StoryPack(self.root / "authored", "test-book"), self.archive)
 
-    def configure_audio(self, reading):
+    def configure_audio(self, reading, recording="s2.wav"):
         temporary = self.root / "audio.tmp"
         write_json(temporary, {"reading": str(self.root / reading) if reading else None,
-                              "recording": str(self.root / "s2.wav"), "question": str(self.root / "q2.wav")})
+                              "recording": str(self.root / recording), "question": str(self.root / "q2.wav")})
         temporary.replace(self.root / "audio.json")
 
     def make_audio_programs(self):
@@ -388,6 +389,21 @@ log('end')
         self.assertEqual(self.api("GET", "/v1/position-reviews")[1]["items"], [review])
         self.uart.tag("0004A12B")
         self.wait_event(lambda event: event.get("status") == "started")
+        self.console("select s2")
+        self.wait_event(lambda event: event.get("segmentId") == "s2" and "text" in event)
+        self.configure_audio(None, "foreign.wav")
+        mark = len(self.events)
+        self.console("record 2")
+        uncertain = self.wait_event(lambda event: any(item.get("status") == "uncertain"
+                                                       for item in event.get("events", [])), after=mark)
+        self.assertEqual(uncertain["segmentId"], "s2")
+        mark = len(self.events)
+        self.console("ask-voice 2")
+        confirmation = self.wait_event(lambda event: event.get("status") == "needsPositionConfirmation",
+                                       after=mark)
+        self.assertEqual(confirmation["segmentId"], "s2")
+        self.assertTrue(confirmation["audio"].endswith("prompt-needsPositionConfirmation.wav"))
+        self.configure_audio(None)
         self.console("select s2")
         self.wait_event(lambda event: event.get("segmentId") == "s2" and "text" in event)
         mark = len(self.events)

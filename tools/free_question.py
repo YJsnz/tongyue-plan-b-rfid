@@ -47,28 +47,41 @@ def extractive_answer(text_index, segment_id, question):
     anchors = query_bigrams(question)
     if len(terms) < 3:
         return {"status": "unsupported"}
-    record = next((item for item in text_index.segments if item["segmentId"] == segment_id), None)
-    if record is None:
+    current_index = next((index for index, item in enumerate(text_index.segments)
+                          if item["segmentId"] == segment_id), None)
+    if current_index is None:
         return {"status": "unsupported"}
     candidates = []
-    for sentence in evidence_sentences(record["text"]):
-        observed = query_characters(sentence)
-        matched = terms & observed
-        coverage = len(matched) / len(terms)
-        sentence_chars = [char for char in sentence if "\u3400" <= char <= "\u9fff" or "\uf900" <= char <= "\ufaff"]
-        matched_anchors = anchors & set(zip(sentence_chars, sentence_chars[1:]))
-        if len(matched) >= 3 and coverage >= 0.6 and matched_anchors:
-            candidates.append((coverage, len(matched), len(matched_anchors), sentence))
+    first = max(0, current_index - 1)
+    last = min(len(text_index.segments), current_index + 2)
+    current_record = text_index.segments[current_index]
+    for record_index in range(first, last):
+        record = text_index.segments[record_index]
+        distance = abs(record_index - current_index)
+        if distance and (record.get("chapterId") != current_record.get("chapterId") or
+                         record.get("storyId") != current_record.get("storyId")):
+            continue
+        for sentence in evidence_sentences(record["text"]):
+            observed = query_characters(sentence)
+            matched = terms & observed
+            coverage = len(matched) / len(terms)
+            sentence_chars = [char for char in sentence
+                              if "\u3400" <= char <= "\u9fff" or "\uf900" <= char <= "\ufaff"]
+            matched_anchors = anchors & set(zip(sentence_chars, sentence_chars[1:]))
+            if len(matched) >= 3 and coverage >= 0.6 and matched_anchors:
+                candidates.append((coverage, len(matched), len(matched_anchors), distance,
+                                   record["segmentId"], sentence))
     if not candidates:
         return {"status": "unsupported"}
     candidates.sort(reverse=True)
     best = candidates[0]
     if len(candidates) > 1 and candidates[1][:3] == best[:3]:
         return {"status": "unsupported"}
-    evidence = best[3]
-    return {"status": "answered", "segmentId": segment_id, "question": QUESTION_LABEL,
-            "answer": "绘本这一页写着：“" + evidence + "”", "evidence": evidence,
-            "answerMode": "extractive"}
+    scope = "这一页" if best[3] == 0 else "相邻段落"
+    evidence = best[5]
+    return {"status": "answered", "segmentId": best[4], "question": QUESTION_LABEL,
+            "answer": "绘本" + scope + "写着：“" + evidence + "”", "evidence": evidence,
+            "answerMode": "extractive", "evidenceScope": "current" if best[3] == 0 else "adjacent"}
 
 
 def transcribe_question(path, acoustic):

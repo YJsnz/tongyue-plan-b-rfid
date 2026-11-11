@@ -81,6 +81,19 @@ class TextIndexTests(unittest.TestCase):
         self.assertEqual(pack.answer_free("s1", "恐龙为什么会飞？")["status"], "unsupported")
         self.assertEqual(pack.answer("s1", "第0个问题发生了什么？")["status"], "answered")
 
+    def test_free_question_searches_one_neighbor_only_within_the_same_story(self):
+        raw = self.source()
+        raw["segments"][1]["storyId"] = "rain"
+        same_story = self.compile(raw, "same-story-packs")
+        result = same_story.answer_free("s1", "乐乐喜欢什么？")
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["segmentId"], "s2")
+        self.assertEqual(result["evidenceScope"], "adjacent")
+        self.assertIn(result["evidence"], same_story.segments[1]["text"])
+
+        separate_story = self.compile()
+        self.assertEqual(separate_story.answer_free("s1", "乐乐喜欢什么？")["status"], "unsupported")
+
     def test_binary_roundtrip_does_not_need_the_authoring_library(self):
         pack = self.compile()
         from unittest.mock import patch

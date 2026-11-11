@@ -18,6 +18,37 @@ class FreeQuestionTests(unittest.TestCase):
         self.assertEqual(result["evidence"], "小熊带着一把伞出门，因为天要下雨了。")
         self.assertEqual(result["answer"], "绘本这一页写着：“小熊带着一把伞出门，因为天要下雨了。”")
         self.assertEqual(result["answerMode"], "extractive")
+        self.assertEqual(result["evidenceScope"], "current")
+
+    def test_adjacent_segment_can_answer_with_a_verbatim_and_identified_excerpt(self):
+        index = SimpleNamespace(segments=[
+            {"segmentId": "s0", "text": "雨停了，太阳出来了。"},
+            {"segmentId": "s1", "text": "小熊走进森林。"},
+            {"segmentId": "s2", "text": "小熊把伞交给小兔，因为雨下大了。"},
+            {"segmentId": "s3", "text": "他们一起回家。"},
+        ])
+        result = extractive_answer(index, "s1", "小熊把伞交给了谁？")
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["segmentId"], "s2")
+        self.assertEqual(result["evidence"], "小熊把伞交给小兔，因为雨下大了。")
+        self.assertEqual(result["answer"], "绘本相邻段落写着：“小熊把伞交给小兔，因为雨下大了。”")
+        self.assertEqual(result["evidenceScope"], "adjacent")
+
+    def test_nearby_search_does_not_reach_two_segments_away(self):
+        index = SimpleNamespace(segments=[
+            {"segmentId": "s0", "text": "小熊把伞交给小兔，因为雨下大了。"},
+            {"segmentId": "s1", "text": "雨停了。"},
+            {"segmentId": "s2", "text": "小熊走进森林。"},
+        ])
+        self.assertEqual(extractive_answer(index, "s2", "小熊把伞交给了谁？")["status"], "unsupported")
+
+    def test_equally_relevant_current_and_adjacent_evidence_is_ambiguous(self):
+        excerpt = "小熊把伞交给小兔，因为雨下大了。"
+        index = SimpleNamespace(segments=[
+            {"segmentId": "s1", "text": excerpt},
+            {"segmentId": "s2", "text": excerpt},
+        ])
+        self.assertEqual(extractive_answer(index, "s1", "小熊把伞交给了谁？")["status"], "unsupported")
 
     def test_unrelated_vague_and_out_of_page_questions_decline(self):
         index = self.index("小熊带着一把伞出门，因为天要下雨了。")

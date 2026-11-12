@@ -811,7 +811,7 @@ struct Index {
   @Builder
   Detail() {
     Column({ space: 15 }) {
-      if (this.view !== 'book') {
+      if (this.view !== 'book' && this.view !== 'read') {
         Row() {
           Text('‹  返回').fontSize(17).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor('#188C4A').onClick(() => { this.setView(''); });
           Blank();

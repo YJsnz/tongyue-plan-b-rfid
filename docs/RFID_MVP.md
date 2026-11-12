@@ -95,11 +95,50 @@ Invoke-RestMethod "$reader/v1/reading-sessions?after=$($batch.nextCursor)"
 
 ### 用鸿蒙手机或模拟器接入
 
-1. 在 DevEco Studio 启动已配置签名的应用，或在可用的鸿蒙模拟器上运行。用 `hdc list targets` 确认只有当前联调目标，再执行 `hdc rport tcp:8765 tcp:8765`。这会将目标上的本地端口映射到电脑上的模拟器。
+1. 在 DevEco Studio 启动已配置签名的应用，或在可用的鸿蒙模拟器上运行。PowerShell 若提示找不到 `hdc`，说明 HDC 工具目录不在 PATH；可使用 DevEco SDK 中的完整路径。用下面命令确认目标并映射端口：
+
+   ```powershell
+   $hdc = 'D:\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
+   & $hdc list targets
+   & $hdc -t '127.0.0.1:5555' rport tcp:8765 tcp:8765
+   ```
+
+   若模拟器目标 ID 不同，将 `127.0.0.1:5555` 换成 `list targets` 返回的当前目标。该映射把模拟器中的本地 8765 端口连到电脑 RFID 服务。
 2. 保持电脑上的模拟器运行。在应用中打开「设备 → 管理阅读器与绘本标签」，填写 `http://127.0.0.1:8765` 并连接。
 3. 在应用选择绘本并启动扫描。电脑端执行上方第一条 `/sim/tap` 命令，等待应用显示 UID，再在应用确认绑定。
 4. 电脑端再次调用 `/sim/tap`，再调用 `/sim/finish`。回到应用同步记录，检查出现一条对应绘本的记录。再次同步应无新增。退出应用、关闭电脑模拟器后重新进入应用，检查已同步的记录仍可查看。
 5. 返回首页，核对最近绘本、末段和今日次数。打开成长页切换本周和上周，核对同一条记录只出现在对应日期和周，切换阅读器后检查统计按设备区分。
+
+### App 操作电脑阅读
+
+这部分使用 PC RFID 模拟器和 HarmonyOS 模拟器验证 App 操作、正文音频及问答联动。服务只监听电脑 `127.0.0.1`，通过 HDC reverse 映射给模拟器访问；模拟 UID 不是实物读卡，模拟器音频输出也不是 Hi3516 扬声器验收。
+
+在仓库根目录的 PowerShell 窗口启动带 StoryPack、自由文字问答和 Windows 中文离线合成的服务：
+
+```powershell
+py -X utf8 -B tools/rfid_simulator.py `
+  --state "$env:TEMP\tongyue-demo-reader.json" `
+  --packs output/rfid-semantic-qa-demo/packs `
+  --allow-free-questions `
+  --local-tts-dir output/local-qa-audio
+```
+
+另开 PowerShell 窗口设置 HDC 映射，然后在模拟器打开 App 的“设备 → 阅读器记录”页面，连接 `http://127.0.0.1:8765`：
+
+```powershell
+$hdc = 'D:\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
+& $hdc -t '127.0.0.1:5555' rport tcp:8765 tcp:8765
+```
+
+在“电脑阅读联动演示”区域操作：
+
+1. 测试 UID 默认是 `0004A12B`。若该 UID 尚未绑定，点击“扫描绘本标签”，再点“模拟贴入标签以完成扫描”，选 `小熊找朋友` 并确认绑定。
+2. 点“模拟贴卡并开始阅读”。App 会从 `/sim/reading` 读取 PC 当前会话、段落编号和原文；点击“上一段/下一段”手动切段。
+3. 点“播放正文”播放当前 StoryPack WAV。切段后正文音频会随当前段更新。
+4. 在问题框输入 `小熊出门时随身携带的是什么？` 并提交。App 显示书内回答和原文证据；服务启用 `--local-tts-dir` 时还会返回动态 WAV，点“播放答案音频”由 HarmonyOS AVPlayer 播放。
+5. 点“结束阅读并同步记录”。App 会结束 PC 会话、同步历史，然后可在“本机阅读记录”中展开并核对问答证据。
+
+PC 模拟器的音频路由仅允许当前 StoryPack 清单中的段落/FAQ WAV，以及当前会话生成的 UUID WAV；答案原文和证据按现有规则进入摘要，合成文件路径与自由问题原文不进入摘要。完整 UI 回路要逐项确认切段、正文播放、问答、答案播放、结束、同步和历史证据；当前只证明 HAP 编译、PC 音频/API 单测和模拟器显示当前段，未将未点验的 UI 步骤记为通过。若更改了模拟器 Python 代码，先停止旧服务，再用上述命令重启，避免进程仍运行旧接口。
 
 ### 编译 StoryPack 并验证按段落检索
 

@@ -1,4 +1,5 @@
 # DevEco Studio and Hvigor state
+.venv-qt-debug/
 .idea/
 .hvigor/
 **/.hvigor/

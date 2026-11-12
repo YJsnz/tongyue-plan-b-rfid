@@ -109,6 +109,18 @@ Invoke-RestMethod "$reader/v1/reading-sessions?after=$($batch.nextCursor)"
 4. 电脑端再次调用 `/sim/tap`，再调用 `/sim/finish`。回到应用同步记录，检查出现一条对应绘本的记录。再次同步应无新增。退出应用、关闭电脑模拟器后重新进入应用，检查已同步的记录仍可查看。
 5. 返回首页，核对最近绘本、末段和今日次数。打开成长页切换本周和上周，核对同一条记录只出现在对应日期和周，切换阅读器后检查统计按设备区分。
 
+### Qt 电脑本地调试台
+
+可在 Windows 上创建独立 Python 环境并启动图形调试台。Qt 不进入 HarmonyOS HAP 或 Linux 阅读器运行依赖：
+
+```powershell
+py -3.14 -m venv .venv-qt-debug
+.\.venv-qt-debug\Scripts\python.exe -m pip install -r tools/requirements-qt-debug.txt
+.\.venv-qt-debug\Scripts\python.exe -X utf8 -B tools/qt_debug_station.py
+```
+
+窗口左侧可启动/停止本调试台启动的电脑服务、连接现有服务、选择 StoryPack、模拟扫描并绑定 UID、刷卡、切段、提问、播放正文/答案、结束阅读并重新读取历史；右侧显示设备/阅读状态和实时日志。HTTP 工作在后台线程。调试台不会停止由其他窗口启动的服务；服务只绑定本机回环地址，模拟 UID 不代表 PN532 实物读卡。服务默认使用 `%TEMP%\tongyue-demo-reader.json`，与 App 演示命令共享同一份电脑状态。
+
 ### App 操作电脑阅读
 
 这部分使用 PC RFID 模拟器和 HarmonyOS 模拟器验证 App 操作、正文音频及问答联动。服务只监听电脑 `127.0.0.1`，通过 HDC reverse 映射给模拟器访问；模拟 UID 不是实物读卡，模拟器音频输出也不是 Hi3516 扬声器验收。

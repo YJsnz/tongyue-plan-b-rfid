@@ -1,0 +1,3 @@
+# Optional local desktop UI; omit unused Qt WebEngine/PDF packages.
+PySide6-Essentials>=6.10,<7
+PySide6-Addons>=6.10,<7

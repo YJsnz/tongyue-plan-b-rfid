@@ -167,6 +167,8 @@ class Reader:
             return {"deviceId": self.state["deviceId"], "firmwareVersion": "pc-simulator", "protocolVersion": 1}
         if method == "GET" and path == "/v1/books":
             return {"items": self.books()}
+        if method == "GET" and path == "/sim/reading":
+            return self.reading_state()
         if method == "POST" and path == "/v1/scans":
             self.require_storage()
             self.scan = {"scanId": uuid4().hex, "deadline": time.monotonic() + self.scan_timeout}
@@ -318,12 +320,81 @@ class Reader:
         pack = self.load_pack(book)
         self.active = {"sessionId": uuid4().hex, "tagUid": uid, "bookId": book, "started": time.monotonic(), "pack": pack,
                        "segmentId": "s1", "positionSource": "manual", "positionUncertain": False, "answers": [],
+                       "answerAudios": [],
                        "trajectory": [], "trajectoryDropped": 0,
                        "traceStats": {"repeated": 0, "relocated": 0, "uncertain": 0}, "wordIndex": None, "ctcTracker": None}
         result = {"status": "started", "bookId": book}
         if pack is not None:
             result.update(self.select_segment(pack.segments[0]["segmentId"]))
         return result
+
+    def reading_state(self):
+        if self.active is None:
+            return {"active": False}
+        pack = self.active["pack"]
+        segments = pack.segments if pack is not None else []
+        index = next((i for i, item in enumerate(segments)
+                      if item["segmentId"] == self.active["segmentId"]), -1)
+        current = segments[index] if index >= 0 else None
+        return {
+            "active": True,
+            "sessionId": self.active["sessionId"],
+            "bookId": self.active["bookId"],
+            "bookTitle": pack.book["title"] if pack is not None else self.active["bookId"],
+            "segmentId": self.active["segmentId"],
+            "segmentNumber": index + 1 if index >= 0 else 0,
+            "segmentCount": len(segments),
+            "segmentIds": [item["segmentId"] for item in segments],
+            "text": current["text"] if current is not None else "",
+            "positionUncertain": self.active["positionUncertain"],
+        }
+
+    def audio_bytes(self, path):
+        if self.active is None:
+            raise ApiError(409, "NO_ACTIVE_SESSION")
+        pack = self.active["pack"]
+        if pack is None:
+            raise ApiError(404, "AUDIO_NOT_FOUND")
+        if path == "/sim/audio/current":
+            segment = next((item for item in pack.segments
+                            if item["segmentId"] == self.active["segmentId"]), None)
+            if segment is None:
+                raise ApiError(404, "AUDIO_NOT_FOUND")
+            relative = segment["audio"]
+            root = pack.directory.resolve()
+            source = (root / relative).resolve()
+            if relative not in pack.book["files"] or not source.is_relative_to(root):
+                raise ApiError(404, "AUDIO_NOT_FOUND")
+            limit = 24 * 1024 * 1024
+        else:
+            answer = re.fullmatch(r"/sim/audio/(answer-[0-9a-f]{32}\.wav)", path)
+            authored = re.fullmatch(r"/sim/audio/pack/(audio_cache/(?:segment-[A-Za-z0-9_-]{1,64}|answer-[0-9]{1,3})\.wav)", path)
+            if answer:
+                if answer.group(1) not in self.active["answerAudios"] or self.local_tts_dir is None:
+                    raise ApiError(404, "AUDIO_NOT_FOUND")
+                root = self.local_tts_dir.resolve()
+                source = (root / answer.group(1)).resolve()
+                if not source.is_relative_to(root):
+                    raise ApiError(404, "AUDIO_NOT_FOUND")
+                limit = 8 * 1024 * 1024
+            elif authored:
+                relative = authored.group(1)
+                if relative not in pack.book["files"]:
+                    raise ApiError(404, "AUDIO_NOT_FOUND")
+                root = pack.directory.resolve()
+                source = (root / relative).resolve()
+                if not source.is_relative_to(root):
+                    raise ApiError(404, "AUDIO_NOT_FOUND")
+                limit = 24 * 1024 * 1024
+            else:
+                raise ApiError(404, "AUDIO_NOT_FOUND")
+        try:
+            size = source.stat().st_size
+            if not source.is_file() or size <= 0 or size > limit:
+                raise ApiError(404, "AUDIO_NOT_FOUND")
+            return source.read_bytes()
+        except OSError as error:
+            raise ApiError(404, "AUDIO_NOT_FOUND") from error
 
     def select_segment(self, segment_id):
         if self.active is None:
@@ -492,7 +563,13 @@ class Reader:
         try:
             result = pack.answer(self.active["segmentId"], question)
             if result.get("status") == "unsupported" and self.allow_free_questions:
-                return self.synthesize_free_answer(pack.answer_free(self.active["segmentId"], question))
+                result = pack.answer_free(self.active["segmentId"], question)
+            if result.get("status") == "answered":
+                audio = result.get("audio")
+                if isinstance(audio, str) and re.fullmatch(
+                        r"audio_cache/(?:segment-[A-Za-z0-9_-]{1,64}|answer-[0-9]{1,3})\.wav", audio):
+                    result = {**result, "audioUrl": "/sim/audio/pack/" + audio}
+                return self.synthesize_free_answer(result)
             return result
         except (ValueError, sqlite3.Error) as error:
             raise ApiError(409, "PACK_INVALID") from error
@@ -504,9 +581,17 @@ class Reader:
             from local_tts import synthesize
             speech = synthesize(result["answer"], self.local_tts_dir)
         except (OSError, RuntimeError, ValueError, KeyError) as error:
-            raise ApiError(503, "LOCAL_TTS_UNAVAILABLE") from error
-        return {**result, "synthesizedAudio": speech["path"], "speechVoice": speech["voice"],
-                "speechDurationMs": speech["durationMs"]}
+            return {**result, "speechUnavailable": True}
+        with_path = {**result, "synthesizedAudio": speech["path"], "speechVoice": speech["voice"],
+                     "speechDurationMs": speech["durationMs"]}
+        name = Path(speech["path"]).name
+        if not re.fullmatch(r"answer-[0-9a-f]{32}\.wav", name):
+            return {**with_path, "speechUnavailable": True}
+        answer_audios = self.active.setdefault("answerAudios", [])
+        answer_audios.append(name)
+        if len(answer_audios) > 20:
+            del answer_audios[0]
+        return {**with_path, "audioUrl": "/sim/audio/" + name}
 
     def remember_answer(self, result, source):
         if self.active is None or result.get("status") != "answered":
@@ -600,6 +685,7 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
 
     def handle_request(self):
+        content_type = "application/json; charset=utf-8"
         try:
             self.authorize()
             size = int(self.headers.get("Content-Length", "0"))
@@ -614,7 +700,11 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(size)) if size else {}
                 if not isinstance(data, dict):
                     raise ApiError(400, "INVALID_BODY")
-                result = self.server.reader.dispatch(self.command, target, data)
+                if self.command == "GET" and target.path.startswith("/sim/audio/"):
+                    result = self.server.reader.audio_bytes(target.path)
+                    content_type = "audio/wav"
+                else:
+                    result = self.server.reader.dispatch(self.command, target, data)
             status = 200
         except (ValueError, UnicodeError):
             status, result = 400, {"code": "INVALID_REQUEST"}
@@ -626,10 +716,12 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as error:
             self.log_error("%s", error)
             status, result = 500, {"code": "IO_ERROR"}
-        body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+        body = result if isinstance(result, bytes) else json.dumps(result, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if content_type == "audio/wav":
+            self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 

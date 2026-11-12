@@ -50,6 +50,7 @@
 - [x] 成长页展示位置复核周统计并能切换本周/上周；模拟器已验收卡片布局和周期切换。
 - [x] 按参考图实现绘本详情与阅读入口：复用森林封面，显示书名、适龄/时长、简介、绿色共读主按钮，并在右上角加入播放和提问入口。2026-11-12 验证：HarmonyOS API 26 `assembleHap` 编译通过。
 - [x] 将 App 绘本详情入口接到电脑 RFID 服务的活动 StoryPack：可从此页开始/继续、切换当前段、播放正文与答案 WAV、提问并显示证据、结束并同步历史；连接与忙碌状态复用现有 Reader API。2026-11-12 验证：`assembleHap` 成功，`test_rfid_simulator_app_link.py` 4/4 通过。
+- [x] 修复 AVPlayer 播放流程的异步状态竞态：设置音源后等 `initialized` 再 `prepare`，准备后等 `prepared` 再 `play`，并限制状态提示重复显示。2026-11-12 验证：unsigned HAP 构建成功；阅读器 API 回归 5/5。实际音频播放在上方 HarmonyOS 模拟器 E2E TODO 中验收。
 - [ ] 在 HarmonyOS 模拟器目视检查参考布局：封面裁切、右上角按钮、内容滚动和共读主按钮在常见手机尺寸下的可见性。
 - [ ] 在 HarmonyOS 模拟器从绘本详情实际点击完成“开始阅读 → 切段 → 播放正文 → 提问 → 播放回答 → 结束/同步 → 查看历史证据”，记录 HAP、模拟器版本和操作结果；此验收仍不代表实物 RFID 或板端音频。
 - [ ] 在鸿蒙真机验收文件选择器、StoryPack 上传、配对密钥安全保存、TLS 证书处理、断网提示、超时重试和重启恢复。
@@ -196,13 +197,14 @@ PC 默认提供方仅实现有限关系识别与模板回答，不是大语言�
 以下记录包含 2026-11-11 的基线和 2026-11-12 的阅读联动开发检查；每次相关代码开发后应重新运行受影响检查，并更新本节及任务证据。
 
 - 2026-11-12 App 绘本体验页：按参考图新增封面/书名/简介/共读按钮、右上角正文播放和提问入口，并复用 PC 阅读器联动控制与历史同步；DevEco Hvigor `assembleHap` 成功，PC 音频/阅读 API 单测 4/4 通过。本轮未安装新 HAP 或操作模拟器，因此页面目视与 App 点击全流程仍待验收。
+- 2026-11-12 AVPlayer 状态竞态：播放正文/回答时等待 `initialized → prepared → playing`，并在播放器异常/等待超时时清理监听，阅读页不再重复渲染同一条音频错误。HAP 构建通过；本轮未安装 HAP 或实际播放，模拟器听音验收仍待完成。
 - 2026-11-12 设备页读卡跳转：移除“电脑阅读联动演示”卡片；PC 模拟器环境点击扫描后用预设 UID 读取/绑定并自动进入阅读页。`test_rfid_simulator_app_link.py` 5/5、Python 工具全量 107 项通过且 18 项按平台/可选资源跳过；`assembleHap` 成功。App 点击流和真实 RFID 仍待设备验收。
 - 2026-11-12 Qt 本地调试台：独立 PySide6 6.12 venv 离屏启动通过；`test_qt_debug_station.py` 2/2 通过，覆盖服务启停、模拟绑定/刷卡、切段、问答、正文/答案 WAV 获取、结束后刷新历史、连接错误、非法 StoryPack 目录，以及不将模拟错误正文中的授权密钥写入 UI。测试服务及状态文件在临时目录；离屏测试不证明声卡实际播放。
 - 2026-11-12 问答提供方及读卡跳转回归：完整 Python 工具套件 `py -X utf8 -B -m unittest discover -s tools -p "test_*.py"` 107 项通过、18 项因平台/可选资源跳过；其中 `test_qa_providers.py` 9/9、`test_qt_debug_station.py` 2/2、`test_rfid_simulator_app_link.py` 5/5。DeepSeek 只做 HTTP mock 验证，未配置 API Key，未进行真实联网请求。
 - 2026-11-12 App 阅读联动：DevEco Hvigor `assembleHap` 成功；HarmonyOS 7 API 26 模拟器已显示电脑模拟器绘本和阅读段落。App 内翻段、正文播放、云问答/答案播报、结束与历史证据查看的完整 E2E 仍待本机模拟器验收；当前 HAP 未安装本轮最新问答错误提示与超时变更。MediaKit 编译有设备能力提示，当前只针对 API 26 模拟器继续验收；无签名配置。
 - 2026-11-12 PC 阅读 API：新增 `GET /sim/reading` 返回活动会话、当前原文和段落 ID；音频路由只允许活动 StoryPack 清单内的正文/FAQ WAV，或当前会话生成的 UUID WAV。4 项单测覆盖状态切换、内容和路径校验、合成回答 WAV、HTTP `audio/wav` 响应。
 
-- 2026-11-11 Windows Python 3.14 回归基线：83 项、0 失败、16 项按平台/可选模型条件跳过；最新 2026-11-12 结果见上方 106 项总回归记录。
+- 2026-11-11 Windows Python 3.14 回归基线：83 项、0 失败、16 项按平台/可选模型条件跳过；最新 2026-11-12 结果见上方 107 项总回归记录。
 - WSL 全量回归：87 项、85 通过、2 项按平台条件跳过、0 失败；7 项真实 CTC 模型检查全部通过，包括流式定位、StoryPack 音节 Beam、静音词拒绝、官方 sherpa-onnx 转写对照、固定 TTS 波形变异和自由语音问句证据检查。使用含 CTC、StoryPack 作者依赖和 sherpa-onnx 的完整 WSL 环境，以及十段演示夹具。
 - 家长端服务逻辑电脑回归：24/24 通过；两个独立家长端与 Python 阅读器 HTTP 处理器的复核同步端到端检查通过。
 - HarmonyOS API 26 unsigned HAP：Hvigor assembleHap 成功；已在 HarmonyOS 7 API 26 Mate 90 Pro 模拟器查看成长页位置复核卡片并切换本周/上周，样例复核数为零。

@@ -321,6 +321,30 @@ export struct RfidReaderPanel {
     if (this.reading.active) { this.showQuestionControls = true; }
   }
 
+  private waitForPlayerState(player: media.AVPlayer, expected: media.AVPlayerState): Promise<void> {
+    if (player.state === expected) { return Promise.resolve(); }
+    return new Promise<void>((resolve: () => void, reject: (error: Error) => void) => {
+      let completed: boolean = false;
+      let timeoutId: number = -1;
+      const finish = (error?: Error): void => {
+        if (completed) { return; }
+        completed = true;
+        clearTimeout(timeoutId);
+        try { player.off('stateChange', onStateChange); } catch (_) { }
+        if (error) { reject(error); } else { resolve(); }
+      };
+      const onStateChange = (state: media.AVPlayerState): void => {
+        if (state === expected) { finish(); }
+        else if (state === 'error' || state === 'released') {
+          finish(new Error('播放器进入' + state + '状态'));
+        }
+      };
+      timeoutId = setTimeout(() => { finish(new Error('等待播放器进入' + expected + '状态超时')); }, 15000);
+      player.on('stateChange', onStateChange);
+      if (player.state === expected) { finish(); }
+    });
+  }
+
   private async playAudio(path: string, label: string): Promise<void> {
     const reader = this.reader;
     if (!reader) { return; }
@@ -335,8 +359,11 @@ export struct RfidReaderPanel {
       });
       player.url = reader.audioUrl(path);
       this.audioMessage = '正在准备' + label + '…';
+      await this.waitForPlayerState(player, 'initialized');
       await player.prepare();
+      await this.waitForPlayerState(player, 'prepared');
       await player.play();
+      await this.waitForPlayerState(player, 'playing');
       this.audioMessage = '正在播放' + label;
     } catch (error) {
       await this.releaseAudio();
@@ -662,7 +689,7 @@ export struct RfidReaderPanel {
         .backgroundColor('#20C85B').borderRadius(16).enabled(!this.busy && !this.simTapBusy)
         .onClick(() => { this.startExperienceReading(); });
       if (this.reading.active) { this.ReadingControls(); }
-      if (this.audioMessage) {
+      if (this.audioMessage && !this.reading.active) {
         Text(this.audioMessage).fontFamily(FONT_BODY).fontSize(13).fontColor('#53665E');
       }
       if (this.message) {

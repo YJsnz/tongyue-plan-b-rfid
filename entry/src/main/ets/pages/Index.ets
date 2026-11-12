@@ -182,7 +182,7 @@ struct Index {
 
   private go(target: string): void {
     if (target === 'back') { this.setView(''); }
-    else if (target === 'read') { this.page = 8; this.setView('read'); }
+    else if (target === 'read') { this.setView('book'); }
     else if (target === 'finish') {
       this.transitionPage(() => {
         this.view = 'finish';
@@ -792,11 +792,13 @@ struct Index {
   @Builder
   Detail() {
     Column({ space: 15 }) {
-      Row() {
-        Text('‹  返回').fontSize(17).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor('#188C4A').onClick(() => { this.setView(''); });
-        Blank();
-        Text(this.child).fontSize(14).fontFamily(FONT_BODY).fontColor(MUTED);
-      }.width('100%');
+      if (this.view !== 'book') {
+        Row() {
+          Text('‹  返回').fontSize(17).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor('#188C4A').onClick(() => { this.setView(''); });
+          Blank();
+          Text(this.child).fontSize(14).fontFamily(FONT_BODY).fontColor(MUTED);
+        }.width('100%');
+      }
       if (this.view === 'device-settings') {
         Text('阅读器设置').fontFamily(FONT_TITLE).fontSize(27).fontColor(INK).width('100%');
         Text('故事音量  ' + this.deviceVolume + '%').fontFamily(FONT_STRONG).fontSize(18).fontColor(INK).width('100%');
@@ -837,29 +839,13 @@ struct Index {
         Text(this.answerText()).fontFamily(FONT_BODY).fontSize(19).fontColor('#53647E').lineHeight(34);
         this.Action('回到对话', LIME, 'back');
       } else if (this.view === 'book') {
-        this.Cover(this.selected, 300);
-        Text(this.titles[this.selected]).fontSize(29).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK).width('100%');
-        Text('3–6 岁  ·  约 15 分钟  ·  亲子共读').fontSize(15).fontFamily(FONT_BODY).fontColor(MUTED).width('100%');
-        Text('在故事里认识新朋友，也听听孩子心里的小世界。读完后，可以聊聊：“你最喜欢谁？为什么？”')
-          .fontSize(17).fontFamily(FONT_BODY).fontColor('#52655D').lineHeight(30);
-        this.Action('和孩子一起读  ▶', LIME, 'read');
+        RfidReaderPanel({ readingExperience: true, experienceTitle: this.titles[this.selected], experienceCover: this.selected,
+          onExperienceBack: () => { this.setView(''); }, onOpenDevice: () => { this.setView('pair'); },
+          onCacheChanged: (cache: ReaderCache) => { this.updateReadingSummary(cache); } });
       } else if (this.view === 'read') {
-        Row() {
-          Text(this.titles[this.selected]).fontSize(18).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK).layoutWeight(1);
-          Text(this.page + ' / 24').fontSize(14).fontFamily(FONT_BODY).fontColor(MUTED);
-        }.width('100%');
-        Progress({ value: this.page, total: 24, type: ProgressType.Linear }).width('100%').height(8).color(LIME).backgroundColor('#E6EEE6');
-        this.Cover(this.selected, 340);
-        Text(this.page < 16 ? '小雨来到森林里，想找一个可以一起读故事的朋友。' : '“你好，我们能一起玩吗？”小雨终于勇敢地说出了心里的话。')
-          .fontSize(22).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK).lineHeight(35).width('100%');
-        Text('演示共读 · 可手动翻页体验').fontSize(14).fontFamily(FONT_BODY).fontColor(MUTED).width('100%');
-        Row({ space: 10 }) {
-          Button('上一页').height(49).layoutWeight(1).backgroundColor('#EDF3EF').fontColor(INK).borderRadius(15)
-            .onClick(() => { this.page = Math.max(1, this.page - 1); });
-          Button(this.page >= 24 ? '完成共读' : '下一页 →').height(49).layoutWeight(2).backgroundColor(LIME).fontColor(LIGHT)
-            .fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).borderRadius(15)
-            .onClick(() => { if (this.page >= 24) { this.go('finish'); } else { this.page++; } });
-        }.width('100%');
+        RfidReaderPanel({ readingExperience: true, experienceTitle: this.titles[this.selected], experienceCover: this.selected,
+          onExperienceBack: () => { this.setView(''); }, onOpenDevice: () => { this.setView('pair'); },
+          onCacheChanged: (cache: ReaderCache) => { this.updateReadingSummary(cache); } });
       } else if (this.view === 'finish') {
         Column({ space: 12 }) {
           this.CelebrationCharacter();

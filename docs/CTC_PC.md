@@ -83,9 +83,9 @@ py -X utf8 -B tools/demo_question.py `
   --play --audio-dir output/local-qa-audio
 ```
 
-PC 模拟器可通过 `--allow-free-questions --local-tts-dir output/local-qa-audio` 开启自由问答和动态 WAV 生成。`/sim/ask` 保留 `synthesizedAudio` 电脑本地路径，并返回给客户端播放用的相对 `audioUrl`；FAQ 预录答案走 StoryPack 清单校验后的音频路由。`GET /sim/reading` 返回活动段落文字和段落编号，`GET /sim/audio/current` 返回当前段 WAV。HarmonyOS API 26 家长端已加入 PC 模拟贴卡、手动切段、正文播放、文字提问、证据展示、答案 WAV 播放和结束后同步的操作面板。动态 WAV 不进入 StoryPack 哈希清单或阅读摘要；面板与路由仍是电脑测试工具，不是板端扬声器播放集成。
+PC 模拟器可通过 `--allow-free-questions --local-tts-dir output/local-qa-audio` 开启自由问答和动态 WAV 生成。`/sim/ask` 保留 `synthesizedAudio` 电脑本地路径，并返回给客户端播放用的相对 `audioUrl`；FAQ 预录答案走 StoryPack 清单校验后的音频路由。`GET /sim/reading` 返回活动段落文字和段落编号，`GET /sim/audio/current` 返回当前段 WAV。HarmonyOS API 26 家长端有绘本详情体验页，使用森林封面、故事简介和绿色共读主按钮；右上角播放入口可启动/播放当前段，提问入口可启动阅读并展开当前段问答。活动阅读区可切段、显示正文、播放正文/答案 WAV、展示原文证据，并结束后同步历史。设备中心继续负责电脑服务连接、RFID 标签扫描和绑定。动态 WAV 不进入 StoryPack 哈希清单或阅读摘要；这些入口和路由仍是电脑测试工具，不是板端扬声器播放集成。
 
-模拟器完整 UI 演示操作步骤（包括 HDC 端口映射和 App 入口）见 [RFID_MVP.md](RFID_MVP.md) 的“App 操作电脑阅读”。代码构建与服务路由单测通过；完整 HarmonyOS UI 音频/问答/结束流程待模拟器验收。
+模拟器完整 UI 演示操作步骤（包括 HDC 端口映射和 App 入口）见 [RFID_MVP.md](RFID_MVP.md) 的“App 操作电脑阅读”。新页面 unsigned HAP 构建与服务路由单测通过；页面目视检查和完整 HarmonyOS UI 音频/问答/结束流程仍待模拟器验收。
 
 实际板端仍默认运行受限 FAQ 和预录音回答。板端采音/转写、任意关系问句、动态语音合成/播放及回答延迟验收尚未完成。
 

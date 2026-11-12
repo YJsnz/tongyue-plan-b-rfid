@@ -9,7 +9,12 @@ import { confirmedEndTime } from '../services/ReadingStats';
 @Component
 export struct RfidReaderPanel {
   onCacheChanged: (cache: ReaderCache) => void = (_: ReaderCache): void => {};
+  onExperienceBack: () => void = (): void => {};
+  onOpenDevice: () => void = (): void => {};
   @Prop managePacks: boolean = false;
+  @Prop readingExperience: boolean = false;
+  @Prop experienceTitle: string = '小小探险家';
+  @Prop experienceCover: number = 0;
   @State address: string = '';
   @State pairingToken: string = '';
   @State caCertificate: string = '';
@@ -32,6 +37,7 @@ export struct RfidReaderPanel {
   @State reading: ReaderReadingState = { active: false };
   @State question: string = '';
   @State answer: ReaderQuestionResult = { status: 'idle' };
+  @State showQuestionControls: boolean = false;
   @State audioActive: boolean = false;
   @State audioMessage: string = '';
   private cachePath: string = '';
@@ -230,6 +236,7 @@ export struct RfidReaderPanel {
       const status = await reader.simulateTap(uid);
       if (status === 'started' || status === 'alreadyReading') {
         this.reading = await reader.readingState();
+        if (status === 'started') { this.showQuestionControls = false; }
         this.answer = { status: 'idle' };
         this.message = this.reading.active ? '已连接到《' + (this.reading.bookTitle ?? '') + '》的当前阅读' :
           '模拟标签已呈送，但当前没有活动阅读';
@@ -287,6 +294,32 @@ export struct RfidReaderPanel {
     }
   }
 
+  private async startExperienceReading(): Promise<void> {
+    if (!this.simulatorAvailable) {
+      this.message = '请先在设备中心连接电脑阅读器，再回到这里开始共读';
+      this.onOpenDevice();
+      return;
+    }
+    await this.simulateReadingTap();
+  }
+
+  private async toggleExperienceAudio(): Promise<void> {
+    if (this.audioActive) {
+      await this.releaseAudio();
+      this.audioMessage = '已停止正文播放';
+      return;
+    }
+    if (!this.reading.active) { await this.startExperienceReading(); }
+    if (this.reading.active) { await this.playStoryAudio(); }
+  }
+
+  private async openExperienceQuestion(): Promise<void> {
+    if (!this.reading.active) {
+      await this.startExperienceReading();
+    }
+    if (this.reading.active) { this.showQuestionControls = true; }
+  }
+
   private async playAudio(path: string, label: string): Promise<void> {
     const reader = this.reader;
     if (!reader) { return; }
@@ -338,6 +371,7 @@ export struct RfidReaderPanel {
       await reader.finishReading(segmentId);
       this.reading = { active: false };
       this.answer = { status: 'idle' };
+      this.showQuestionControls = false;
       this.message = '本次阅读已结束，正在同步问答证据和阅读记录…';
     } catch (error) {
       if (this.visible) { this.message = (error as Error).message || '结束阅读失败'; }
@@ -554,23 +588,25 @@ export struct RfidReaderPanel {
             .enabled(!this.busy && (this.reading.segmentNumber ?? 0) < (this.reading.segmentCount ?? 0))
             .onClick(() => { this.moveSegment(1); });
         }
-        TextInput({ placeholder: '就这一段内容提问，例如：小熊带了什么？', text: this.question })
-          .fontFamily(FONT_BODY).maxLength(120).enabled(!this.busy)
-          .onChange((value: string) => { this.question = value; });
-        Button(this.busy ? '正在处理…' : '提问并查找原文证据').fontFamily(FONT_STRONG).width('100%')
-          .enabled(!this.busy && this.question.trim().length > 0).backgroundColor('#E8F6EC').fontColor('#188C4A')
-          .onClick(() => { this.submitQuestion(); });
-        if (this.answer.status === 'answered') {
-          Column({ space: 5 }) {
-            Text('回答').fontFamily(FONT_STRONG).fontSize(14).fontColor('#188C4A');
-            Text(this.answer.answer ?? '').fontFamily(FONT_BODY).fontSize(16).fontColor('#152044');
-            Text('原文证据：「' + (this.answer.evidence ?? '') + '」')
-              .fontFamily(FONT_BODY).fontSize(14).fontColor('#53665E');
-            if (this.answer.audioUrl) {
-              Button(this.audioActive ? '答案播放中' : '播放答案音频').fontFamily(FONT_STRONG)
-                .backgroundColor('#FFF1DF').fontColor('#815828').onClick(() => { this.playAnswerAudio(); });
-            }
-          }.width('100%').alignItems(HorizontalAlign.Start).padding(10).backgroundColor('#F3F8F3').borderRadius(10);
+        if (!this.readingExperience || this.showQuestionControls || this.answer.status === 'answered') {
+          TextInput({ placeholder: '就这一段内容提问，例如：小熊带了什么？', text: this.question })
+            .fontFamily(FONT_BODY).maxLength(120).enabled(!this.busy)
+            .onChange((value: string) => { this.question = value; });
+          Button(this.busy ? '正在处理…' : '提问并查找原文证据').fontFamily(FONT_STRONG).width('100%')
+            .enabled(!this.busy && this.question.trim().length > 0).backgroundColor('#E8F6EC').fontColor('#188C4A')
+            .onClick(() => { this.submitQuestion(); });
+          if (this.answer.status === 'answered') {
+            Column({ space: 5 }) {
+              Text('回答').fontFamily(FONT_STRONG).fontSize(14).fontColor('#188C4A');
+              Text(this.answer.answer ?? '').fontFamily(FONT_BODY).fontSize(16).fontColor('#152044');
+              Text('原文证据：「' + (this.answer.evidence ?? '') + '」')
+                .fontFamily(FONT_BODY).fontSize(14).fontColor('#53665E');
+              if (this.answer.audioUrl) {
+                Button(this.audioActive ? '答案播放中' : '播放答案音频').fontFamily(FONT_STRONG)
+                  .backgroundColor('#FFF1DF').fontColor('#815828').onClick(() => { this.playAnswerAudio(); });
+              }
+            }.width('100%').alignItems(HorizontalAlign.Start).padding(10).backgroundColor('#F3F8F3').borderRadius(10);
+          }
         }
         if (this.audioMessage) {
           Text(this.audioMessage).fontFamily(FONT_BODY).fontSize(12).fontColor('#53665E');
@@ -586,7 +622,60 @@ export struct RfidReaderPanel {
     }
   }
 
-  build() {
+  @Builder
+  ReadingExperience() {
+    Column({ space: 12 }) {
+      Row({ space: 9 }) {
+        Text('‹ 返回').fontFamily(FONT_STRONG).fontSize(16).fontColor('#188C4A')
+          .onClick(() => { this.onExperienceBack(); });
+        Blank();
+        Button(this.audioActive ? 'Ⅱ' : '▶').width(38).height(38).fontSize(16).fontColor('#188C4A')
+          .backgroundColor('#E8F6EC').borderRadius(19).enabled(!this.busy)
+          .onClick(() => { this.toggleExperienceAudio(); });
+        Button('问').width(38).height(38).fontFamily(FONT_STRONG).fontSize(15).fontColor('#188C4A')
+          .backgroundColor('#E8F6EC').borderRadius(19).enabled(!this.busy)
+          .onClick(() => { this.openExperienceQuestion(); });
+      }.width('100%').height(40);
+      if (this.simulatorAvailable) {
+        Text('电脑阅读器已连接 · 本地演示').fontFamily(FONT_BODY).fontSize(12).fontColor('#538167');
+      } else {
+        Text(this.busy ? '正在连接阅读器…' : '连接电脑阅读器后，可从这里操作共读')
+          .fontFamily(FONT_BODY).fontSize(12).fontColor('#7C8B9D');
+      }
+      if (this.experienceCover === 1) {
+        Image($r('app.media.page_covers_moon')).width('100%').height(250).objectFit(ImageFit.Cover).borderRadius(19);
+      } else if (this.experienceCover === 2) {
+        Image($r('app.media.page_covers_seed')).width('100%').height(250).objectFit(ImageFit.Cover).borderRadius(19);
+      } else {
+        Image($r('app.media.page_covers_forest')).width('100%').height(250).objectFit(ImageFit.Cover).borderRadius(19);
+      }
+      Text(this.reading.active ? (this.reading.bookTitle ?? this.experienceTitle) : this.experienceTitle)
+        .fontFamily(FONT_TITLE).fontSize(27).fontColor('#152044').width('100%');
+      Text('3–6 岁  ·  约 15 分钟  ·  亲子共读')
+        .fontFamily(FONT_BODY).fontSize(14).fontColor('#7C8B9D').width('100%');
+      Text('在故事里认识新朋友，也听听孩子心里的小世界。读完后，可以聊聊：“你最喜欢谁？为什么？”')
+        .fontFamily(FONT_BODY).fontSize(16).fontColor('#52655D').lineHeight(27).width('100%');
+      Button(this.simTapBusy ? '正在连接阅读…' : (this.reading.active ? '继续和孩子一起读  ▶' : '和孩子一起读  ▶'))
+        .fontFamily(FONT_STRONG).fontSize(17).width('100%').height(52).fontColor('#102E22')
+        .backgroundColor('#20C85B').borderRadius(16).enabled(!this.busy && !this.simTapBusy)
+        .onClick(() => { this.startExperienceReading(); });
+      if (this.reading.active) { this.ReadingControls(); }
+      if (this.audioMessage) {
+        Text(this.audioMessage).fontFamily(FONT_BODY).fontSize(13).fontColor('#53665E');
+      }
+      if (this.message) {
+        Text(this.message).fontFamily(FONT_BODY).fontSize(14).fontColor('#53665E').width('100%');
+      }
+      if (!this.simulatorAvailable) {
+        Button('前往设备中心连接阅读器').fontFamily(FONT_BODY).fontSize(13).fontColor('#188C4A')
+          .backgroundColor('#FFFFFF').width('100%').onClick(() => { this.onOpenDevice(); });
+      }
+    }.width('100%').padding({ left: 20, right: 20, top: 10, bottom: 22 })
+      .alignItems(HorizontalAlign.Start).backgroundColor('#FFFDF7');
+  }
+
+  @Builder
+  DevicePanel() {
     Column({ space: 14 }) {
       Text(this.managePacks ? '阅读器里的故事' : '阅读器与绘本标签').fontFamily(FONT_TITLE).fontSize(26).fontColor('#152044');
       TextInput({ placeholder: 'https://阅读器地址:8765', text: this.address }).fontFamily(FONT_BODY)
@@ -692,5 +781,13 @@ export struct RfidReaderPanel {
         }, (session: ReadingSession) => session.sessionId);
       }
     }.width('100%').alignItems(HorizontalAlign.Start);
+  }
+
+  build() {
+    if (this.readingExperience) {
+      this.ReadingExperience();
+    } else {
+      this.DevicePanel();
+    }
   }
 }

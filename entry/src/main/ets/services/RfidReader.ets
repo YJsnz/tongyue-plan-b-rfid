@@ -13,6 +13,16 @@ interface Scan {
   scanId: string;
 }
 
+interface SimulationTap {
+  status: string;
+}
+
+interface SegmentSelection {
+  segmentId: string;
+  text?: string;
+  audio?: string;
+}
+
 export interface ScanResult {
   status: string;
   tagUid?: string;
@@ -22,6 +32,30 @@ export interface ReaderBook {
   bookId: string;
   title: string;
   version?: string;
+}
+
+export interface ReaderReadingState {
+  active: boolean;
+  sessionId?: string;
+  bookId?: string;
+  bookTitle?: string;
+  segmentId?: string;
+  segmentNumber?: number;
+  segmentCount?: number;
+  segmentIds?: string[];
+  text?: string;
+  positionUncertain?: boolean;
+}
+
+export interface ReaderQuestionResult {
+  status: string;
+  segmentId?: string;
+  question?: string;
+  answer?: string;
+  evidence?: string;
+  audioUrl?: string;
+  speechVoice?: string;
+  speechUnavailable?: boolean;
 }
 
 export interface ImportedStoryPack extends ReaderBook {
@@ -370,6 +404,10 @@ export class RfidReader {
             message = '绘本包未传输完成，请检查网络后重试';
           }
           if (failure.code === 'INVALID_PACK_UPLOAD') { message = '请选择正确的 .tar.gz 绘本包'; }
+          if (failure.code === 'NO_ACTIVE_SESSION') { message = '当前没有正在进行的阅读'; }
+          if (failure.code === 'SESSION_ACTIVE') { message = '阅读器正在阅读另一本绘本，请先结束当前阅读'; }
+          if (failure.code === 'INVALID_QUESTION') { message = '请输入一个问题'; }
+          if (failure.code === 'AUDIO_NOT_FOUND') { message = '当前没有可播放的音频'; }
         } catch (_) {
           // Some development servers return a non-JSON error page.
         }
@@ -424,6 +462,63 @@ export class RfidReader {
     const result = await this.request<ConfirmedBinding>('/v1/book-bindings/' + encodeURIComponent(uid),
       http.RequestMethod.PUT, JSON.stringify(binding));
     if (result.tagUid !== uid || result.bookId !== bookId) { throw new Error('阅读器返回的绑定结果不一致'); }
+  }
+
+  async simulateTap(uid: string): Promise<string> {
+    if (!/^[0-9A-Fa-f]{4,32}$/.test(uid)) { throw new Error('模拟标签 UID 格式不正确'); }
+    const result = await this.request<SimulationTap>('/sim/tap', http.RequestMethod.POST,
+      JSON.stringify({ tagUid: uid.toUpperCase() }));
+    if (!['scanned', 'unbound', 'started', 'alreadyReading'].includes(result.status)) {
+      throw new Error('阅读器返回了无法识别的模拟贴卡结果');
+    }
+    return result.status;
+  }
+
+  async readingState(): Promise<ReaderReadingState> {
+    const result = await this.request<ReaderReadingState>('/sim/reading', http.RequestMethod.GET);
+    if (!result || typeof result.active !== 'boolean') { throw new Error('阅读器返回的阅读状态格式不正确'); }
+    if (!result.active) { return { active: false }; }
+    if (typeof result.sessionId !== 'string' || !result.sessionId || typeof result.bookId !== 'string' ||
+      typeof result.bookTitle !== 'string' || typeof result.segmentId !== 'string' ||
+      !Number.isSafeInteger(result.segmentNumber) || !Number.isSafeInteger(result.segmentCount) ||
+      !Array.isArray(result.segmentIds) || result.segmentIds.length !== result.segmentCount ||
+      result.segmentIds.some((id: string) => typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id)) ||
+      typeof result.text !== 'string' || typeof result.positionUncertain !== 'boolean') {
+      throw new Error('阅读器返回的当前段落格式不正确');
+    }
+    return result;
+  }
+
+  async selectSegment(segmentId: string): Promise<ReaderReadingState> {
+    await this.request<SegmentSelection>('/sim/select-segment', http.RequestMethod.POST,
+      JSON.stringify({ segmentId: segmentId }));
+    return this.readingState();
+  }
+
+  async askQuestion(question: string): Promise<ReaderQuestionResult> {
+    const result = await this.request<ReaderQuestionResult>('/sim/ask', http.RequestMethod.POST,
+      JSON.stringify({ question: question }));
+    if (!result || typeof result.status !== 'string') { throw new Error('阅读器返回的回答格式不正确'); }
+    if (result.status === 'answered' && (typeof result.answer !== 'string' || typeof result.evidence !== 'string' ||
+      typeof result.segmentId !== 'string')) {
+      throw new Error('阅读器返回的答案缺少原文证据');
+    }
+    if (result.audioUrl !== undefined && typeof result.audioUrl !== 'string') {
+      throw new Error('阅读器返回的音频地址格式不正确');
+    }
+    return result;
+  }
+
+  async finishReading(segmentId: string): Promise<ReadingSession> {
+    return this.request<ReadingSession>('/sim/finish', http.RequestMethod.POST,
+      JSON.stringify({ lastSegmentId: segmentId }));
+  }
+
+  audioUrl(path: string): string {
+    if (!/^\/sim\/audio\/(?:current|pack\/audio_cache\/(?:segment-[A-Za-z0-9_-]{1,64}|answer-[0-9]{1,3})\.wav|answer-[0-9a-f]{32}\.wav)$/.test(path)) {
+      throw new Error('阅读器返回的音频路径不安全');
+    }
+    return this.address + path;
   }
 
   async sync(history: ReaderHistory): Promise<ReaderHistory> {

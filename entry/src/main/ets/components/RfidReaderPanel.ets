@@ -1,8 +1,9 @@
 import { picker } from '@kit.CoreFileKit';
+import { media } from '@kit.MediaKit';
 import { FONT_BODY, FONT_STRONG, FONT_TITLE } from '../theme/Typography';
 import { AnswerEvidence, emptyReaderCache, readReaderCache, readReaderToken, ReaderBook, ReaderCache, readerAddress, ReaderHistory,
   ReadingSession, readStoryPack, RfidReader, saveReaderCache, saveReaderToken, PositionTrace, PositionReview,
-  updatePositionReview } from '../services/RfidReader';
+  updatePositionReview, ReaderQuestionResult, ReaderReadingState } from '../services/RfidReader';
 import { confirmedEndTime } from '../services/ReadingStats';
 
 @Component
@@ -12,6 +13,7 @@ export struct RfidReaderPanel {
   @State address: string = '';
   @State pairingToken: string = '';
   @State caCertificate: string = '';
+  @State scanId: string = '';
   @State books: ReaderBook[] = [];
   @State deviceId: string = '';
   @State busy: boolean = false;
@@ -24,10 +26,18 @@ export struct RfidReaderPanel {
   @State reviewTarget: string = '';
   @State reviewNote: string = '';
   @State reviews: PositionReview[] = [];
+  @State simulatorAvailable: boolean = false;
+  @State simTagUid: string = '0004A12B';
+  @State simTapBusy: boolean = false;
+  @State reading: ReaderReadingState = { active: false };
+  @State question: string = '';
+  @State answer: ReaderQuestionResult = { status: 'idle' };
+  @State audioActive: boolean = false;
+  @State audioMessage: string = '';
   private cachePath: string = '';
   private cache: ReaderCache = emptyReaderCache();
   private reader?: RfidReader;
-  private scanId: string = '';
+  private player?: media.AVPlayer;
   private visible: boolean = false;
 
   aboutToAppear(): void {
@@ -54,6 +64,7 @@ export struct RfidReaderPanel {
 
   aboutToDisappear(): void {
     this.visible = false;
+    this.releaseAudio();
   }
 
   private showHistory(deviceId: string): void {
@@ -69,9 +80,13 @@ export struct RfidReaderPanel {
   }
 
   private invalidateConnection(): void {
+    this.releaseAudio();
     this.reader = undefined;
     this.deviceId = '';
     this.tag = '';
+    this.scanId = '';
+    this.simulatorAvailable = false;
+    this.reading = { active: false };
     this.message = '';
   }
 
@@ -106,12 +121,17 @@ export struct RfidReaderPanel {
       }
       const books = await reader.books();
       if (!this.visible) { return; }
+      const isSimulator = info.firmwareVersion === 'pc-simulator';
+      let currentReading: ReaderReadingState = { active: false };
+      if (isSimulator) { currentReading = await reader.readingState(); }
       if (token && !reuseToken) { await saveReaderToken(info.deviceId, token); }
       if (!this.visible) { return; }
       this.save({ address: address, currentDevice: info.deviceId, histories: this.cache.histories,
         caCertificate: caCertificate, books: books, positionReviews: this.cache.positionReviews });
       this.reader = reader;
       this.deviceId = info.deviceId;
+      this.simulatorAvailable = isSimulator;
+      this.reading = currentReading;
       this.expandedSession = '';
       this.expandedTrace = '';
       this.reviewTarget = '';
@@ -136,6 +156,7 @@ export struct RfidReaderPanel {
     this.message = '请将绘本标签贴近阅读器';
     try {
       const id = await reader.startScan();
+      this.scanId = id;
       const deadline = Date.now() + 35000;
       while (this.visible && Date.now() < deadline) {
         const result = await reader.checkScan(id);
@@ -143,6 +164,7 @@ export struct RfidReaderPanel {
         if (result.status === 'detected' && typeof result.tagUid === 'string' && result.tagUid) {
           this.scanId = id;
           this.tag = result.tagUid;
+          this.simTagUid = result.tagUid;
           this.message = '已读到标签，请确认要绑定的绘本';
           return;
         }
@@ -150,6 +172,7 @@ export struct RfidReaderPanel {
         await new Promise<void>((resolve: () => void) => { setTimeout(resolve, 700); });
       }
       if (this.visible) { this.message = '扫描已超时，请重新扫描'; }
+      this.scanId = '';
     } catch (error) {
       if (this.visible) { this.message = (error as Error).message || '扫描失败，请重试'; }
     } finally {
@@ -166,6 +189,7 @@ export struct RfidReaderPanel {
       await reader.bind(this.tag, this.scanId, book.bookId);
       if (!this.visible) { return; }
       this.message = '已将标签绑定到《' + book.title + '》';
+      this.simTagUid = this.tag;
       this.tag = '';
       this.scanId = '';
     } catch (error) {
@@ -173,6 +197,154 @@ export struct RfidReaderPanel {
     } finally {
       if (this.visible) { this.busy = false; }
     }
+  }
+
+  private async simulateScanTap(): Promise<void> {
+    const reader = this.reader;
+    const uid = this.simTagUid.trim().toUpperCase();
+    if (!reader || !this.simulatorAvailable || !this.scanId || this.simTapBusy ||
+      !/^[0-9A-F]{4,32}$/.test(uid)) { return; }
+    this.simTapBusy = true;
+    try {
+      const status = await reader.simulateTap(uid);
+      if (this.visible) {
+        this.simTagUid = uid;
+        this.message = status === 'scanned' ? '已向电脑模拟器呈送标签，正在读取扫描结果…' :
+          '电脑模拟器返回：' + status;
+      }
+    } catch (error) {
+      if (this.visible) { this.message = (error as Error).message || '模拟贴卡失败'; }
+    } finally {
+      if (this.visible) { this.simTapBusy = false; }
+    }
+  }
+
+  private async simulateReadingTap(): Promise<void> {
+    const reader = this.reader;
+    const uid = this.simTagUid.trim().toUpperCase();
+    if (!reader || !this.simulatorAvailable || this.busy || this.simTapBusy ||
+      !/^[0-9A-F]{4,32}$/.test(uid)) { return; }
+    this.simTapBusy = true;
+    this.message = '正在向电脑阅读器呈送模拟标签…';
+    try {
+      const status = await reader.simulateTap(uid);
+      if (status === 'started' || status === 'alreadyReading') {
+        this.reading = await reader.readingState();
+        this.answer = { status: 'idle' };
+        this.message = this.reading.active ? '已连接到《' + (this.reading.bookTitle ?? '') + '》的当前阅读' :
+          '模拟标签已呈送，但当前没有活动阅读';
+      } else if (status === 'unbound') {
+        this.message = '这个 UID 尚未绑定绘本。先扫描绘本标签，再点击“模拟贴入标签”并完成绑定。';
+      } else {
+        this.message = '标签已被当前配对扫描接收，请先完成扫描和绑定';
+      }
+    } catch (error) {
+      if (this.visible) { this.message = (error as Error).message || '无法开始模拟阅读'; }
+    } finally {
+      if (this.visible) { this.simTapBusy = false; }
+    }
+  }
+
+  private async moveSegment(delta: number): Promise<void> {
+    const reader = this.reader;
+    const state = this.reading;
+    if (!reader || !state.active || this.busy || !state.segmentIds) { return; }
+    const index = (state.segmentNumber ?? 1) - 1 + delta;
+    if (index < 0 || index >= state.segmentIds.length) { return; }
+    this.busy = true;
+    this.answer = { status: 'idle' };
+    await this.releaseAudio();
+    try {
+      this.reading = await reader.selectSegment(state.segmentIds[index]);
+      this.message = '已切换到第 ' + this.reading.segmentNumber + ' 段';
+    } catch (error) {
+      if (this.visible) { this.message = (error as Error).message || '切换段落失败'; }
+    } finally {
+      if (this.visible) { this.busy = false; }
+    }
+  }
+
+  private async submitQuestion(): Promise<void> {
+    const reader = this.reader;
+    const text = this.question.trim();
+    if (!reader || !this.reading.active || this.busy || !text) { return; }
+    this.busy = true;
+    await this.releaseAudio();
+    try {
+      this.answer = await reader.askQuestion(text);
+      if (this.answer.status === 'answered') {
+        this.message = this.answer.speechUnavailable ? '已回答并保留原文证据；本机语音合成暂不可用' :
+          '回答已关联当前段落，可播放答案音频';
+      } else if (this.answer.status === 'needsPositionConfirmation') {
+        this.message = '当前位置不确定，请先手动确认段落后再提问';
+      } else {
+        this.message = '当前绘本没有足够原文证据回答这个问题';
+      }
+    } catch (error) {
+      if (this.visible) { this.message = (error as Error).message || '提问失败，请重试'; }
+    } finally {
+      if (this.visible) { this.busy = false; }
+    }
+  }
+
+  private async playAudio(path: string, label: string): Promise<void> {
+    const reader = this.reader;
+    if (!reader) { return; }
+    await this.releaseAudio();
+    try {
+      const player = await media.createAVPlayer();
+      this.player = player;
+      player.on('stateChange', (state: string) => {
+        this.audioActive = state === 'playing';
+        if (state === 'completed') { this.audioMessage = label + '播放完成'; }
+        if (state === 'error') { this.audioMessage = label + '播放失败'; }
+      });
+      player.url = reader.audioUrl(path);
+      this.audioMessage = '正在准备' + label + '…';
+      await player.prepare();
+      await player.play();
+      this.audioMessage = '正在播放' + label;
+    } catch (error) {
+      await this.releaseAudio();
+      this.audioMessage = (error as Error).message || label + '播放失败';
+    }
+  }
+
+  private async playStoryAudio(): Promise<void> {
+    await this.playAudio('/sim/audio/current', '正文音频');
+  }
+
+  private async playAnswerAudio(): Promise<void> {
+    const path = this.answer.audioUrl;
+    if (path) { await this.playAudio(path, '答案音频'); }
+  }
+
+  private async releaseAudio(): Promise<void> {
+    const player = this.player;
+    this.player = undefined;
+    this.audioActive = false;
+    if (player) {
+      try { await player.release(); } catch (_) { }
+    }
+  }
+
+  private async finishReading(): Promise<void> {
+    const reader = this.reader;
+    if (!reader || !this.reading.active || this.busy) { return; }
+    const segmentId = this.reading.segmentId ?? '';
+    this.busy = true;
+    await this.releaseAudio();
+    try {
+      await reader.finishReading(segmentId);
+      this.reading = { active: false };
+      this.answer = { status: 'idle' };
+      this.message = '本次阅读已结束，正在同步问答证据和阅读记录…';
+    } catch (error) {
+      if (this.visible) { this.message = (error as Error).message || '结束阅读失败'; }
+    } finally {
+      if (this.visible) { this.busy = false; }
+    }
+    if (!this.reading.active && this.visible) { await this.sync(); }
   }
 
   private async sync(): Promise<void> {
@@ -357,6 +529,63 @@ export struct RfidReaderPanel {
     }
   }
 
+  @Builder
+  ReadingControls() {
+    if (this.reading.active) {
+      Column({ space: 10 }) {
+        Text(this.reading.bookTitle ?? this.reading.bookId ?? '正在阅读')
+          .fontFamily(FONT_STRONG).fontSize(18).fontColor('#152044');
+        Text('第 ' + (this.reading.segmentNumber ?? 0) + ' / ' + (this.reading.segmentCount ?? 0) +
+          ' 段 · ' + (this.reading.segmentId ?? ''))
+          .fontFamily(FONT_BODY).fontSize(13).fontColor('#53665E');
+        Text(this.reading.text ?? '此阅读器未提供段落文字')
+          .fontFamily(FONT_BODY).fontSize(16).fontColor('#152044').lineHeight(25);
+        if (this.reading.positionUncertain === true) {
+          Text('阅读位置待确认。请手动选择段落后再提问。')
+            .fontFamily(FONT_BODY).fontSize(13).fontColor('#815828');
+        }
+        Row({ space: 8 }) {
+          Button('上一段').fontFamily(FONT_STRONG).layoutWeight(1).backgroundColor('#E8F6EC').fontColor('#188C4A')
+            .enabled(!this.busy && (this.reading.segmentNumber ?? 1) > 1)
+            .onClick(() => { this.moveSegment(-1); });
+          Button(this.audioActive ? '正文播放中' : '播放正文').fontFamily(FONT_STRONG).layoutWeight(1)
+            .backgroundColor('#188C4A').onClick(() => { this.playStoryAudio(); });
+          Button('下一段').fontFamily(FONT_STRONG).layoutWeight(1).backgroundColor('#E8F6EC').fontColor('#188C4A')
+            .enabled(!this.busy && (this.reading.segmentNumber ?? 0) < (this.reading.segmentCount ?? 0))
+            .onClick(() => { this.moveSegment(1); });
+        }
+        TextInput({ placeholder: '就这一段内容提问，例如：小熊带了什么？', text: this.question })
+          .fontFamily(FONT_BODY).maxLength(120).enabled(!this.busy)
+          .onChange((value: string) => { this.question = value; });
+        Button(this.busy ? '正在处理…' : '提问并查找原文证据').fontFamily(FONT_STRONG).width('100%')
+          .enabled(!this.busy && this.question.trim().length > 0).backgroundColor('#E8F6EC').fontColor('#188C4A')
+          .onClick(() => { this.submitQuestion(); });
+        if (this.answer.status === 'answered') {
+          Column({ space: 5 }) {
+            Text('回答').fontFamily(FONT_STRONG).fontSize(14).fontColor('#188C4A');
+            Text(this.answer.answer ?? '').fontFamily(FONT_BODY).fontSize(16).fontColor('#152044');
+            Text('原文证据：「' + (this.answer.evidence ?? '') + '」')
+              .fontFamily(FONT_BODY).fontSize(14).fontColor('#53665E');
+            if (this.answer.audioUrl) {
+              Button(this.audioActive ? '答案播放中' : '播放答案音频').fontFamily(FONT_STRONG)
+                .backgroundColor('#FFF1DF').fontColor('#815828').onClick(() => { this.playAnswerAudio(); });
+            }
+          }.width('100%').alignItems(HorizontalAlign.Start).padding(10).backgroundColor('#F3F8F3').borderRadius(10);
+        }
+        if (this.audioMessage) {
+          Text(this.audioMessage).fontFamily(FONT_BODY).fontSize(12).fontColor('#53665E');
+        }
+        if (this.audioActive) {
+          Button('停止播放').fontFamily(FONT_BODY).backgroundColor('#FFFFFF').fontColor('#53665E')
+            .onClick(() => { this.releaseAudio(); });
+        }
+        Button(this.busy ? '正在结束…' : '结束阅读并同步记录').fontFamily(FONT_STRONG).width('100%')
+          .enabled(!this.busy).backgroundColor('#F2F3EF').fontColor('#53665E')
+          .onClick(() => { this.finishReading(); });
+      }.width('100%').alignItems(HorizontalAlign.Start).padding(12).backgroundColor('#FFFFFF').borderRadius(14);
+    }
+  }
+
   build() {
     Column({ space: 14 }) {
       Text(this.managePacks ? '阅读器里的故事' : '阅读器与绘本标签').fontFamily(FONT_TITLE).fontSize(26).fontColor('#152044');
@@ -407,6 +636,31 @@ export struct RfidReaderPanel {
           }
         } else {
           Text('阅读器还没有可配对的绘本').fontFamily(FONT_BODY).fontColor('#53665E');
+        }
+        if (this.simulatorAvailable) {
+          Column({ space: 9 }) {
+            Text('电脑阅读联动演示').fontFamily(FONT_STRONG).fontSize(17).fontColor('#152044');
+            Text('此操作只向本机 PC 模拟器发送测试标签，不代表真实 RFID 读卡。')
+              .fontFamily(FONT_BODY).fontSize(12).fontColor('#53665E');
+            TextInput({ placeholder: '测试标签 UID，例如 0004A12B', text: this.simTagUid })
+              .fontFamily(FONT_BODY).maxLength(32).enabled(!this.simTapBusy)
+              .onChange((value: string) => { this.simTagUid = value.toUpperCase(); });
+            if (this.scanId && !this.tag) {
+              Button(this.simTapBusy ? '正在模拟贴卡…' : '模拟贴入标签以完成扫描')
+                .fontFamily(FONT_STRONG).width('100%').backgroundColor('#E8F6EC').fontColor('#188C4A')
+                .enabled(!this.simTapBusy && /^[0-9A-F]{4,32}$/.test(this.simTagUid.trim()))
+                .onClick(() => { this.simulateScanTap(); });
+            }
+            if (this.reading.active) {
+              this.ReadingControls();
+            } else {
+              Button(this.simTapBusy ? '正在启动阅读…' : '模拟贴卡并开始阅读')
+                .fontFamily(FONT_STRONG).width('100%').backgroundColor('#188C4A')
+                .enabled(!this.busy && !this.simTapBusy && !this.scanId &&
+                  /^[0-9A-F]{4,32}$/.test(this.simTagUid.trim()))
+                .onClick(() => { this.simulateReadingTap(); });
+            }
+          }.width('100%').alignItems(HorizontalAlign.Start).padding(12).backgroundColor('#EAF4EC').borderRadius(14);
         }
         Button('同步阅读记录').fontFamily(FONT_STRONG).width('100%')
           .enabled(!this.busy).backgroundColor('#188C4A').onClick(() => { this.sync(); });

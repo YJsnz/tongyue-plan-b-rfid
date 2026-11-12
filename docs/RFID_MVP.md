@@ -119,7 +119,21 @@ py -3.14 -m venv .venv-qt-debug
 .\.venv-qt-debug\Scripts\python.exe -X utf8 -B tools/qt_debug_station.py
 ```
 
-窗口左侧可启动/停止本调试台启动的电脑服务、连接现有服务、选择 StoryPack、模拟扫描并绑定 UID、刷卡、切段、提问、播放正文/答案、结束阅读并重新读取历史；右侧显示设备/阅读状态和实时日志。HTTP 工作在后台线程。调试台不会停止由其他窗口启动的服务；服务只绑定本机回环地址，模拟 UID 不代表 PN532 实物读卡。服务默认使用 `%TEMP%\tongyue-demo-reader.json`，与 App 演示命令共享同一份电脑状态。
+窗口左侧可启动/停止本调试台启动的电脑服务、连接现有服务、选择 StoryPack、模拟扫描并绑定 UID、刷卡、切段、提问、播放正文/答案、结束阅读并重新读取历史；右侧显示设备/阅读状态和实时日志。HTTP 工作在后台线程。调试台不会停止由其他窗口启动的服务；服务只绑定本机回环地址，模拟 UID 不代表 PN532 实物读卡。服务默认使用 `%TEMP%\tongyue-demo-reader.json`，与 App 演示命令共享同一份电脑状态。问答提供方默认选本地 StoryPack 规则；切换 DeepSeek 后，只有本调试台新启动的服务才使用该提供方。
+
+DeepSeek 是电脑端显式联网选项，不在 HAP、模拟器服务默认路径或板端启用。配置密钥后，从同一个 PowerShell 窗口启动调试台：
+
+```powershell
+$secureKey = Read-Host -Prompt "DeepSeek API Key" -AsSecureString
+$env:DEEPSEEK_API_KEY = [System.Net.NetworkCredential]::new("", $secureKey).Password
+py -3.14 -m venv .venv-qt-debug
+.\.venv-qt-debug\Scripts\python.exe -m pip install -r tools/requirements-qt-debug.txt
+.\.venv-qt-debug\Scripts\python.exe -X utf8 -B tools/qt_debug_station.py
+```
+
+在窗口“问答提供方”选择 DeepSeek，并按需选择模型。密钥只通过当前 PowerShell 进程环境传给服务，不要提交到仓库；退出窗口后关闭该 PowerShell，环境变量随进程结束。当前实现会把本次问题和当前 StoryPack 段落正文发送到 DeepSeek API，不发送整本绘本、其它段落、UID 或阅读历史。模型只能返回 JSON；服务只接受与当前段正文唯一逐字匹配的摘录，不匹配时显示错误/拒答。回答文本仍可由电脑 Windows System.Speech 合成为本地 WAV。未配置密钥时不会发出请求。联网服务出错时明确报错，不自动改用本地提供方；如需离线使用，应把选择切回“本地 StoryPack”。真实联网问答尚未验收。
+
+该提供方实现遵循 DeepSeek [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)、[JSON Output 指南](https://api-docs.deepseek.com/guides/json_mode/)和[思考模式设置](https://api-docs.deepseek.com/guides/thinking_mode/)；电脑 HTTP mock 测试不替代真实账号、额度或服务可用性验证。
 
 ### App 操作电脑阅读
 

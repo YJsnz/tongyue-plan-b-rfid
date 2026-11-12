@@ -22,6 +22,8 @@ from uuid import uuid4
 from storypack import StoryPack, identifier, read_json
 from storypack_import import MAX_ARCHIVE_BYTES, PackConflict, install
 from reading_trace import STATUSES, append_position, validated_alignment
+from qa_providers import (ProviderFailure, ProviderUnavailable, StoryPackQuestionAnswerProvider,
+                          create_question_answer_provider)
 
 POSITION_REVIEW_STATUSES = {"needs_review", "position_mismatch", "confirmed"}
 MAX_POSITION_REVIEWS = 512
@@ -41,7 +43,8 @@ class StateWriteError(OSError):
 
 class Reader:
     def __init__(self, state_path, scan_timeout, packs=None, locator=None, recordings=None, *, device_prefix="sim",
-                 trusted_clock=True, ctc_acoustic=None, allow_free_questions=False, local_tts_dir=None):
+                 trusted_clock=True, ctc_acoustic=None, allow_free_questions=False, local_tts_dir=None,
+                 qa_provider=None):
         self.state_path = state_path
         self.scan_timeout = scan_timeout
         self.packs = packs
@@ -51,6 +54,7 @@ class Reader:
         self.ctc_acoustic = ctc_acoustic
         self.allow_free_questions = allow_free_questions
         self.local_tts_dir = local_tts_dir
+        self.qa_provider = qa_provider or StoryPackQuestionAnswerProvider(allow_free_questions)
         self.import_lock = threading.Lock()
         self.storage_needs_restart = False
         self.scan = None
@@ -560,10 +564,11 @@ class Reader:
         pack = self.active["pack"]
         if pack is None:
             return {"status": "unsupported"}
+        provider = getattr(self, "qa_provider", None) or StoryPackQuestionAnswerProvider(
+            getattr(self, "allow_free_questions", False))
         try:
-            result = pack.answer(self.active["segmentId"], question)
-            if result.get("status") == "unsupported" and self.allow_free_questions:
-                result = pack.answer_free(self.active["segmentId"], question)
+            result = provider.answer(pack, self.active["segmentId"], question)
+            result = {**result, "provider": provider.name}
             if result.get("status") == "answered":
                 audio = result.get("audio")
                 if isinstance(audio, str) and re.fullmatch(
@@ -571,6 +576,10 @@ class Reader:
                     result = {**result, "audioUrl": "/sim/audio/pack/" + audio}
                 return self.synthesize_free_answer(result)
             return result
+        except ProviderUnavailable as error:
+            raise ApiError(503, "QA_PROVIDER_UNAVAILABLE") from error
+        except ProviderFailure as error:
+            raise ApiError(502, "QA_PROVIDER_FAILED") from error
         except (ValueError, sqlite3.Error) as error:
             raise ApiError(409, "PACK_INVALID") from error
 
@@ -740,7 +749,11 @@ if __name__ == "__main__":
     parser.add_argument("--locator", type=Path, help="Native locate_wav executable")
     parser.add_argument("--ctc-model", type=Path, help="Optional pinned PC CTC model for reading and question transcription")
     parser.add_argument("--allow-free-questions", action="store_true",
-                        help="PC-only: allow source-grounded semantic relation questions and excerpt fallback")
+                        help="PC-only explicit opt-in for free-text QA and alternate providers")
+    parser.add_argument("--qa-provider", choices=("local", "deepseek"), default="local",
+                        help="PC-only free-question provider; local is the offline default")
+    parser.add_argument("--deepseek-model", choices=("deepseek-flash", "deepseek-v4-pro"),
+                        default="deepseek-flash", help="DeepSeek Chat Completions model")
     parser.add_argument("--local-tts-dir", type=Path,
                         help="PC-only: synthesize free answers with Windows offline Chinese speech")
     parser.add_argument("--recordings", type=Path, help="Directory of local WAV files for simulated read-aloud input")
@@ -749,6 +762,8 @@ if __name__ == "__main__":
         parser.error("--scan-timeout must be positive")
     if args.local_tts_dir and not args.allow_free_questions:
         parser.error("--local-tts-dir requires --allow-free-questions")
+    if args.qa_provider == "deepseek" and not args.allow_free_questions:
+        parser.error("--qa-provider deepseek requires --allow-free-questions")
     if (args.locator or args.ctc_model or args.recordings) and not ((args.locator or args.ctc_model) and args.recordings and args.packs):
         parser.error("--recordings, --packs and --locator or --ctc-model are required for audio location")
     if args.locator and (not args.locator.is_file() or not args.recordings.is_dir()):
@@ -760,12 +775,18 @@ if __name__ == "__main__":
             acoustic = ZipformerCtc(args.ctc_model)
         except (OSError, ValueError, ImportError) as error:
             parser.error(str(error))
+    try:
+        provider = create_question_answer_provider(args.qa_provider, allow_free_questions=args.allow_free_questions,
+                                                   model=args.deepseek_model)
+    except ValueError as error:
+        parser.error(str(error))
     with HTTPServer(("127.0.0.1", args.port), Handler) as server:
         server.reader = Reader(args.state, args.scan_timeout, args.packs,
                                args.locator.resolve() if args.locator else None,
                                args.recordings.resolve() if args.recordings else None, ctc_acoustic=acoustic,
                                allow_free_questions=args.allow_free_questions,
-                               local_tts_dir=args.local_tts_dir.resolve() if args.local_tts_dir else None)
+                               local_tts_dir=args.local_tts_dir.resolve() if args.local_tts_dir else None,
+                               qa_provider=provider)
         print(f"RFID simulator: http://127.0.0.1:{server.server_port}", flush=True)
         try:
             server.serve_forever()

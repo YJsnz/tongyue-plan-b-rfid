@@ -49,6 +49,7 @@ export interface ReaderReadingState {
 
 export interface ReaderQuestionResult {
   status: string;
+  provider?: string;
   segmentId?: string;
   question?: string;
   answer?: string;
@@ -369,7 +370,8 @@ export class RfidReader {
     try {
       const options: http.HttpRequestOptions = {
         method: method, expectDataType: http.HttpDataType.STRING, usingCache: false,
-        connectTimeout: 3500, readTimeout: body instanceof ArrayBuffer ? 90000 : 3500, usingProxy: false, maxRedirects: 0
+        connectTimeout: 3500, readTimeout: body instanceof ArrayBuffer ? 90000 : path === '/sim/ask' ? 45000 : 3500,
+        usingProxy: false, maxRedirects: 0
       };
       const headers: Record<string, string> = {};
       if (this.token) { headers['Authorization'] = 'Bearer ' + this.token; }
@@ -394,6 +396,8 @@ export class RfidReader {
           if (failure.code === 'SCAN_TAG_MISMATCH') { message = '标签与扫描结果不一致，请重新扫描'; }
           if (failure.code === 'RFID_UNAVAILABLE') { message = '阅读器的读卡模块暂时不可用'; }
           if (failure.code === 'PAIRING_REQUIRED') { message = '请输入阅读器的正确配对密钥'; }
+          if (failure.code === 'QA_PROVIDER_UNAVAILABLE') { message = 'DeepSeek 未配置 API Key，云请求未发送；请在电脑设置密钥后重启服务'; }
+          if (failure.code === 'QA_PROVIDER_FAILED') { message = 'DeepSeek 请求失败或回答未通过原文核验，请重试或切回本地问答'; }
           if (failure.code === 'STORAGE_UNAVAILABLE') { message = '阅读器暂时无法保存数据，请检查存储后重试'; }
           if (failure.code === 'STORAGE_RESTART_REQUIRED') { message = '阅读器存储异常，请检查存储并重启阅读器'; }
           if (failure.code === 'PACK_ALREADY_EXISTS') { message = '阅读器已安装同一编号的其他版本，请联系维护人员'; }

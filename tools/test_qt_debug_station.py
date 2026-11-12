@@ -1,9 +1,13 @@
+import io
+import json
 import os
 import socket
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
+from unittest.mock import patch
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -11,7 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 try:
     from PySide6.QtCore import QProcess
     from PySide6.QtWidgets import QApplication
-    from qt_debug_station import DebugStation, ROOT
+    from qt_debug_station import DebugStation, ROOT, request_json
     QT_AVAILABLE = True
 except ImportError:
     QT_AVAILABLE = False
@@ -104,6 +108,16 @@ class QtDebugStationTests(unittest.TestCase):
             finally:
                 window.close()
                 self.app.processEvents()
+
+    def test_api_error_body_cannot_put_a_key_in_the_gui_error_message(self):
+        body = json.dumps({"code": "QA_PROVIDER_FAILED", "apiKey": "test-secret-key"}).encode("utf-8")
+        failure = HTTPError("https://api.deepseek.com/chat/completions", 502, "bad gateway", None,
+                            io.BytesIO(body))
+        with patch("qt_debug_station.urlopen", side_effect=failure):
+            with self.assertRaises(RuntimeError) as error:
+                request_json("http://127.0.0.1:8765", "POST", "/sim/ask", {"question": "test"})
+        self.assertIn("原文核验", str(error.exception))
+        self.assertNotIn("test-secret-key", str(error.exception))
 
 
 if __name__ == "__main__":

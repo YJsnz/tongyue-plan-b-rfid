@@ -129,7 +129,7 @@ StoryPack 格式和作者材料见 [STORYPACK_FORMAT.md](docs/STORYPACK_FORMAT.m
 - [ ] 在 Hi3516 实测从提问结束到首个正确答案实际出声的延迟；至少 20 次独立试验全部检测到正确回答，P95 ≤ 2 秒。
 - [ ] 验证断网时问答链不调用云端；回答语音完整、可听且与引用原文一致。
 
-PC 原型仅实现有限关系识别与模板回答，不是大语言模型，也未覆盖开放域推理；本地 Windows 合成音频可在电脑端生成/播放，但板端采音、语音问答和扬声器播报仍未完成。命令与范围见 [CTC_PC.md](docs/CTC_PC.md)。问答实物时延门见 [RFID_MVP.md](docs/RFID_MVP.md)。
+PC 默认提供方仅实现有限关系识别与模板回答，不是大语言模型，也未覆盖开放域推理；另有显式联网的 DeepSeek 原文摘录问答选项，未做真实 API 实测或儿童安全评估。本地 Windows 合成音频可在电脑端生成/播放，但板端采音、语音问答和扬声器播报仍未完成。命令与范围见 [CTC_PC.md](docs/CTC_PC.md)。问答实物时延门见 [RFID_MVP.md](docs/RFID_MVP.md)。
 
 ### 6. 家长端记录、复核和跨端同步
 
@@ -180,26 +180,28 @@ PC 原型仅实现有限关系识别与模板回答，不是大语言模型，�
 本节是用户要求的 PC 演示扩展。Qt 调试台通过现有电脑 RFID HTTP 服务驱动状态，不模拟真实 PN532；DeepSeek 是显式选择的联网提供方，不能作为断网板端能力或 G0—G5 实物证据。
 
 - [x] 提供可独立安装的 Qt 调试台启动说明和可选依赖，不把 Qt 引入 HarmonyOS HAP 或 Linux 板端运行依赖。2026-11-12 验证：PySide6 6.12 独立 venv 安装成功；命令见 [RFID_MVP.md](docs/RFID_MVP.md)“Qt 电脑本地调试台”。
-- [x] Qt 窗口左侧提供电脑服务启动/停止、健康检查/连接、模拟 UID 绑定/刷卡、切段、正文播放、问答、回答播放、结束和历史刷新；右侧显示带时间戳的操作日志、错误、连接与阅读状态。2026-11-12 验证：`test_qt_debug_station.py` 离屏端到端检查 1/1 通过。
+- [x] Qt 窗口左侧提供电脑服务启动/停止、健康检查/连接、模拟 UID 绑定/刷卡、切段、正文播放、问答、回答播放、结束和历史刷新；右侧显示带时间戳的操作日志、错误、连接与阅读状态。2026-11-12 验证：`test_qt_debug_station.py` 离屏端到端检查 2/2 通过。
 - [x] 网络请求在线程池运行；服务启动/停止、未就绪、非法配置和 HTTP 操作失败可在界面中提示。2026-11-12 验证：`test_qt_debug_station.py` 覆盖隔离服务启停、无法连接提示及 StoryPack 目录错误。
-- [ ] 在 DeepSeek 提供方接入后联测调试台日志脱敏，确认日志不包含 API Key 或其他授权密钥。
-- [ ] 定义可替换的问答提供方接口；现有 StoryPack 规则/证据回答保持默认、本地离线且行为兼容，给未来板端本地模型保留同一接口。
-- [ ] 增加显式 opt-in 的 DeepSeek Chat Completions 提供方：从环境变量读取密钥、默认使用 `deepseek-flash`、限制发送内容为当前 StoryPack 相关段和问题；未设置密钥时明确拒绝云调用，不泄漏密钥。
-- [ ] DeepSeek 回答必须返回可解析结构；只接受其引用可在本次提供的 StoryPack 正文中逐字找到的证据，缺失/错误/越界引用时拒答或回退本地提供方；记录来源但不保存原始问题或密钥。
-- [ ] 用 HTTP mock 验证请求格式、超时/错误、JSON 解析、证据验证、无密钥零网络请求、日志密钥脱敏和默认本地提供方；实际 DeepSeek 联网检查需由用户在本机配置 API Key 后完成，并记录模型与日期。
+- [x] 联测调试台错误日志脱敏，确认模拟 HTTP 错误响应中的密钥和响应正文不会出现在界面错误提示中。验证：`test_qt_debug_station.py` 2/2。
+- [x] 定义可替换的电脑问答提供方接口；现有 StoryPack 规则/证据回答保持默认、本地离线且行为兼容，`QuestionAnswerProvider` 抽象可供后续本地模型适配。
+- [x] 增加显式 opt-in 的 DeepSeek Chat Completions 提供方：从 `DEEPSEEK_API_KEY` 环境变量读取密钥、默认使用 `deepseek-flash`，限制发送内容为当前 StoryPack 段落和本次问题；未设置密钥时在网络请求前明确拒绝。
+- [x] DeepSeek 回答必须返回可解析 JSON；只接受能在本段 StoryPack 正文中唯一逐字找到的原文摘录，缺失/错误/越界引用拒答；结果标记提供方但不保存原始问题或密钥。DeepSeek 请求失败时明确报错，不会暗中切换为本地提供方。
+- [x] 用 HTTP mock 验证请求格式、无密钥零网络请求、超时/HTTP 错误脱敏、JSON/证据校验、默认本地提供方和 Qt 错误提示脱敏：`test_qa_providers.py` 9/9，`test_qt_debug_station.py` 2/2。实际 DeepSeek 联网调用仍待本机配置 API Key 后验收。
 - [x] 编写电脑调试台的独立环境安装、启动与操作说明；验证：按 [RFID_MVP.md](docs/RFID_MVP.md)“Qt 电脑本地调试台”可复现运行。
-- [ ] 编写问答提供方的配置、云端数据范围、本地回退与隐私说明，逐项对照本节 TODO 记录可复现验证结果。
+- [x] 编写问答提供方配置、云端数据范围、离线默认行为与隐私说明；电脑问答提供方接口可替换，DeepSeek 为显式云端选项，板端运行依赖不变。见 [CTC_PC.md](docs/CTC_PC.md) 和 [RFID_MVP.md](docs/RFID_MVP.md)。
+- [ ] 配置本机 `DEEPSEEK_API_KEY` 并进行一次真实联网问答，记录所用模型、日期、返回的原文证据及答案音频联动；不得把密钥写入仓库或聊天。
 
 ## 最近验证
 
 以下记录包含 2026-11-11 的基线和 2026-11-12 的阅读联动开发检查；每次相关代码开发后应重新运行受影响检查，并更新本节及任务证据。
 
 - 2026-11-12 App 绘本体验页：按参考图新增封面/书名/简介/共读按钮、右上角正文播放和提问入口，并复用 PC 阅读器联动控制与历史同步；DevEco Hvigor `assembleHap` 成功，PC 音频/阅读 API 单测 4/4 通过。本轮未安装新 HAP 或操作模拟器，因此页面目视与 App 点击全流程仍待验收。
-- 2026-11-12 Qt 本地调试台：独立 PySide6 6.12 venv 离屏启动通过；`test_qt_debug_station.py` 1/1 通过，覆盖 Qt 启停服务、模拟绑定/刷卡、切段、问题提交、正文/答案 WAV 获取、结束后刷新历史、连接错误及非法 StoryPack 目录提示。测试服务及状态文件在临时目录；离屏测试不证明声卡实际播放。
-- 2026-11-12 App 阅读联动：`py -X utf8 -B -m unittest discover -s tools -p test_rfid_simulator_app_link.py -v` 4/4 通过；`test_semantic_qa.py` 6/6 通过；DevEco Hvigor `assembleHap` 成功（33 个任务），输出 unsigned HAP。HarmonyOS 7 API 26 模拟器已装入联动面板版本并显示 PC 模拟器的活动绘本 `bear-friends`、第 1/10 段和正文；此轮没有完成 App 内翻段、播放、问答/答案播报、结束与历史证据查看，因此 E2E TODO 仍未完成。MediaKit 编译有设备能力提示，当前只针对这台 API 26 模拟器继续验收；无签名配置。
+- 2026-11-12 Qt 本地调试台：独立 PySide6 6.12 venv 离屏启动通过；`test_qt_debug_station.py` 2/2 通过，覆盖服务启停、模拟绑定/刷卡、切段、问答、正文/答案 WAV 获取、结束后刷新历史、连接错误、非法 StoryPack 目录，以及不将模拟错误正文中的授权密钥写入 UI。测试服务及状态文件在临时目录；离屏测试不证明声卡实际播放。
+- 2026-11-12 问答提供方：完整 Python 工具套件 `py -X utf8 -B -m unittest discover -s tools -p "test_*.py"` 106 项通过、18 项因平台/可选资源跳过；其中 `test_qa_providers.py` 9/9、`test_qt_debug_station.py` 2/2。DeepSeek 只做 HTTP mock 验证，未配置 API Key，未进行真实联网请求。
+- 2026-11-12 App 阅读联动：DevEco Hvigor `assembleHap` 成功；HarmonyOS 7 API 26 模拟器已显示电脑模拟器绘本和阅读段落。App 内翻段、正文播放、云问答/答案播报、结束与历史证据查看的完整 E2E 仍待本机模拟器验收；当前 HAP 未安装本轮最新问答错误提示与超时变更。MediaKit 编译有设备能力提示，当前只针对 API 26 模拟器继续验收；无签名配置。
 - 2026-11-12 PC 阅读 API：新增 `GET /sim/reading` 返回活动会话、当前原文和段落 ID；音频路由只允许活动 StoryPack 清单内的正文/FAQ WAV，或当前会话生成的 UUID WAV。4 项单测覆盖状态切换、内容和路径校验、合成回答 WAV、HTTP `audio/wav` 响应。
 
-- Windows Python 3.14 全量回归：83 项、0 失败、16 项按平台/可选模型条件跳过。
+- 2026-11-11 Windows Python 3.14 回归基线：83 项、0 失败、16 项按平台/可选模型条件跳过；最新 2026-11-12 结果见上方 106 项总回归记录。
 - WSL 全量回归：87 项、85 通过、2 项按平台条件跳过、0 失败；7 项真实 CTC 模型检查全部通过，包括流式定位、StoryPack 音节 Beam、静音词拒绝、官方 sherpa-onnx 转写对照、固定 TTS 波形变异和自由语音问句证据检查。使用含 CTC、StoryPack 作者依赖和 sherpa-onnx 的完整 WSL 环境，以及十段演示夹具。
 - 家长端服务逻辑电脑回归：24/24 通过；两个独立家长端与 Python 阅读器 HTTP 处理器的复核同步端到端检查通过。
 - HarmonyOS API 26 unsigned HAP：Hvigor assembleHap 成功；已在 HarmonyOS 7 API 26 Mate 90 Pro 模拟器查看成长页位置复核卡片并切换本周/上周，样例复核数为零。

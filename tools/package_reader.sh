@@ -17,7 +17,7 @@ trap 'exit 1' HUP INT TERM
 bundle="$stage/tongyue-reader"
 mkdir -p "$bundle/tools/examples" "$bundle/docs" "$bundle/reader-build"
 sh "$root/tools/build_reader_arm.sh" "$bundle/reader-build/locate_wav"
-for file in board_reader.py board_preflight.py board_acceptance.py bench_locator.py bench_question_latency.py pn532_hsu.py reader_keys.py rfid_simulator.py reading_trace.py free_question.py semantic_qa.py storypack.py storypack_import.py text_index.py requirements-authoring.txt test_storypack_import.py test_reader_progress.py test_board_runtime.py test_text_index.py test_reading_trace.py test_free_question.py test_semantic_qa.py test_question_latency.py ctc_acoustic.py ctc_alignment.py reading_probe.py fetch_ctc_model.py bench_ctc_pc.py requirements-ctc-pc.txt test_ctc_alignment.py test_ctc_model.py; do
+for file in board_reader.py board_preflight.py board_acceptance.py bench_locator.py bench_question_latency.py pn532_hsu.py reader_keys.py rfid_simulator.py reading_trace.py free_question.py semantic_qa.py qa_providers.py storypack.py storypack_import.py text_index.py requirements-authoring.txt test_storypack_import.py test_reader_progress.py test_board_runtime.py test_text_index.py test_reading_trace.py test_free_question.py test_semantic_qa.py test_question_latency.py ctc_acoustic.py ctc_alignment.py reading_probe.py fetch_ctc_model.py bench_ctc_pc.py requirements-ctc-pc.txt test_ctc_alignment.py test_ctc_model.py; do
     cp "$root/tools/$file" "$bundle/tools/$file"
 done
 cp "$root/tools/examples/bear-friends.json" "$bundle/tools/examples/"

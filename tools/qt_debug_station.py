@@ -71,6 +71,10 @@ def request_json(base_url, method, path, data=None, timeout=6):
             code = detail.get("code", "请求失败") if isinstance(detail, dict) else "请求失败"
         except (UnicodeError, ValueError):
             code = "请求失败"
+        if code == "QA_PROVIDER_UNAVAILABLE":
+            code = "未配置 DEEPSEEK_API_KEY；本次云请求未发送"
+        elif code == "QA_PROVIDER_FAILED":
+            code = "DeepSeek 请求失败或回答未通过原文核验"
         raise RuntimeError(f"HTTP {error.code}: {code}") from None
     except (TimeoutError, URLError, OSError) as error:
         reason = getattr(error, "reason", None)
@@ -164,6 +168,18 @@ class DebugStation(QMainWindow):
         server_form.addRow("服务地址", self.address_input)
         server_form.addRow("服务端口", self.port_input)
         server_form.addRow("StoryPack", packs_row)
+        self.qa_provider_select = QComboBox()
+        self.qa_provider_select.addItem("本地 StoryPack（默认）", "local")
+        self.qa_provider_select.addItem("DeepSeek 云问答（联网）", "deepseek")
+        self.deepseek_model_select = QComboBox()
+        self.deepseek_model_select.addItems(["deepseek-flash", "deepseek-v4-pro"])
+        self.provider_note = QLabel()
+        self.provider_note.setWordWrap(True)
+        self.qa_provider_select.currentIndexChanged.connect(self._update_provider_note)
+        server_form.addRow("问答提供方", self.qa_provider_select)
+        server_form.addRow("DeepSeek 模型", self.deepseek_model_select)
+        server_form.addRow(self.provider_note)
+        self._update_provider_note()
         self.start_button = QPushButton("启动电脑服务")
         self.stop_button = QPushButton("停止本台启动的服务")
         self.refresh_button = QPushButton("连接 / 刷新状态")
@@ -255,6 +271,14 @@ class DebugStation(QMainWindow):
             QPushButton:disabled { color: #8b9891; background: #edf0ed; }
         """)
 
+    def _update_provider_note(self):
+        deepseek = self.qa_provider_select.currentData() == "deepseek"
+        self.deepseek_model_select.setEnabled(deepseek)
+        if deepseek:
+            self.provider_note.setText("联网时仅发送当前段原文和本次问题；程序只接受能在原文逐字核验的摘录。API Key 从 DEEPSEEK_API_KEY 环境变量读取。此选项仅用于本调试台启动的服务。")
+        else:
+            self.provider_note.setText("离线规则/语义问答保持默认，不向云端发送正文或问题。当前设置仅用于本调试台启动的服务。")
+
     def _log(self, message):
         stamp = datetime.now().strftime("%H:%M:%S")
         self.log_view.appendPlainText(f"{stamp}  {message}")
@@ -319,7 +343,8 @@ class DebugStation(QMainWindow):
             evidence = result.get("evidence", "")
             if result.get("status") == "answered":
                 self.status_label.setText("回答：" + answer + "\n原文证据：" + evidence)
-                self._log("问答已返回；证据状态：" + ("已提供" if evidence else "缺少证据"))
+                provider = "DeepSeek" if result.get("provider") == "deepseek" else "本地"
+                self._log(provider + "问答已返回；证据状态：" + ("已提供" if evidence else "缺少证据"))
                 if result.get("speechUnavailable"):
                     self._log("本机语音合成暂不可用，文字回答与原文证据仍可查看")
             else:
@@ -456,7 +481,7 @@ class DebugStation(QMainWindow):
         self.answer_audio_url = ""
         self.play_answer_button.setEnabled(False)
         base = self._base_url()
-        self._start_job("提问", lambda: request_json(base, "POST", "/sim/ask", {"question": question}))
+        self._start_job("提问", lambda: request_json(base, "POST", "/sim/ask", {"question": question}, timeout=35))
 
     def play_story_audio(self):
         base = self._base_url()
@@ -498,7 +523,12 @@ class DebugStation(QMainWindow):
             self._log("找不到 StoryPack 目录：请先生成 output/rfid-semantic-qa-demo")
             return
         args = ["-X", "utf8", "-B", str(SIMULATOR), "--state", str(self.state_file), "--port", str(port),
-                "--packs", str(packs), "--allow-free-questions", "--local-tts-dir", str(self.tts_directory)]
+                "--packs", str(packs), "--allow-free-questions", "--local-tts-dir", str(self.tts_directory),
+                "--qa-provider", self.qa_provider_select.currentData()]
+        if self.qa_provider_select.currentData() == "deepseek":
+            args.extend(["--deepseek-model", self.deepseek_model_select.currentText()])
+            if not os.environ.get("DEEPSEEK_API_KEY"):
+                self._log("未检测到 DEEPSEEK_API_KEY；调试台仍可启动，但不会发起云请求")
         self.server_process.start(sys.executable, args)
         self._log(f"正在启动电脑服务（端口 {port}）；若端口已占用，可直接连接现有服务")
         QTimer.singleShot(800, self.refresh_status)

@@ -597,7 +597,8 @@ export struct RfidReaderPanel {
             .onClick(() => { this.submitQuestion(); });
           if (this.answer.status === 'answered') {
             Column({ space: 5 }) {
-              Text('回答').fontFamily(FONT_STRONG).fontSize(14).fontColor('#188C4A');
+              Text('回答' + (this.answer.provider === 'deepseek' ? ' · DeepSeek 联网' : ' · 本地问答'))
+                .fontFamily(FONT_STRONG).fontSize(14).fontColor('#188C4A');
               Text(this.answer.answer ?? '').fontFamily(FONT_BODY).fontSize(16).fontColor('#152044');
               Text('原文证据：「' + (this.answer.evidence ?? '') + '」')
                 .fontFamily(FONT_BODY).fontSize(14).fontColor('#53665E');

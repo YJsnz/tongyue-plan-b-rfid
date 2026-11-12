@@ -71,12 +71,14 @@ class TextIndexTests(unittest.TestCase):
             other = "s2" if authored["segmentId"] == "s1" else "s1"
             self.assertEqual(pack.answer(other, question)["status"], "unsupported")
 
-    def test_opt_in_free_question_returns_a_verbatim_current_segment_excerpt(self):
+    def test_opt_in_free_question_generates_a_grounded_relation_answer(self):
         pack = self.compile()
         result = pack.answer_free("s1", "小熊会带什么？")
         self.assertEqual(result["status"], "answered")
-        self.assertEqual(result["question"], "原文检索提问")
+        self.assertEqual(result["question"], "书内关系问答")
+        self.assertEqual(result["answer"], "带的是伞。")
         self.assertEqual(result["evidence"], "小熊带着伞。")
+        self.assertEqual(result["answerMode"], "semantic-template")
         self.assertIn(result["evidence"], pack.segments[0]["text"])
         self.assertEqual(pack.answer_free("s1", "恐龙为什么会飞？")["status"], "unsupported")
         self.assertEqual(pack.answer("s1", "第0个问题发生了什么？")["status"], "answered")

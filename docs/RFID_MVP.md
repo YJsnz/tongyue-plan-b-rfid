@@ -205,7 +205,7 @@ py -X utf8 -B tools/rfid_simulator.py --state "$env:TEMP\tongyue-rfid-free-quest
   --allow-free-questions
 ```
 
-刷入演示标签并打开 `bear-friends` 后，`POST /sim/ask` 传入新的中文表达，或 `POST /sim/ask-recording` 传入 `{"recording":"question-free.wav"}`。未知颜色问题 `question-unknown.wav` 应拒答。这个演示验证的是电脑合成语音和词面证据链路，不是儿童实测结果。
+刷入演示标签并打开 `bear-friends` 后，`POST /sim/ask` 传入新的中文表达，或 `POST /sim/ask-recording` 传入 `{"recording":"question-free.wav"}`。未知颜色问题 `question-unknown.wav` 应拒答。可增加 `--local-tts-dir output/local-qa-audio`，让已回答的自由问题在电脑上使用 Windows 中文音色合成 WAV，并在结果中返回 `synthesizedAudio` 本地路径。也可用 `tools/demo_question.py --play` 单独演示生成和播放。此验证属于受限关系模板、PC TTS 和合成录音；不代表通用生成式问答、儿童实测或 Hi3516 播放结果。
 
 目前在 Windows 用中文合成语音验证了同一文本变速、重复、跳段、陌生句、静音、重复模板歧义和过长输入。这个基线在句段端点更新位置，未测真实儿童或跨说话人准确率。端点延迟、板端实时率、内存和录放音仍需在 Hi3516 上验收。
 
@@ -292,7 +292,7 @@ Windows 用实际 C++ 定位器验证了两段中文合成语音在输入流关�
 
 定位器在全书问题录音模板中匹配，问答引擎再按当前确认段落核对已审核证据。匹配分数不足、其它段落的问题和不确定的阅读位置都有单独处理。提示音可按绘本配置，回答或提示播完后恢复跟读。板端日志提供从开始采集到判定的 `captureToDecisionMs`，以及到启动播放器的 `captureToPlaybackDispatchMs`。后者不包含音频设备启动后到真正出声的时间，上板仍需用声学回采验证首个可听音频的延迟。
 
-PC 模拟器可调用 `POST /sim/ask-recording`，传入 `{"recording":"question.wav"}`，文件须在 `--recordings` 目录内。已用独立生成的中文合成语音验证已录入问题、跨段拒答、未知问法、静音、多问和位置不确定提示。WSL 另用替身验证了提问键到播音和恢复跟读的顺序。此实现是有限问法模板匹配，真实儿童跨说话人准确率和 Hi3516 问答延迟仍待实测。
+PC 模拟器可调用 `POST /sim/ask-recording`，传入 `{"recording":"question.wav"}`，文件须在 `--recordings` 目录内。已用独立生成的中文合成语音验证已录入问题、跨段拒答、未知问法、静音、多问和位置不确定提示；开启 `--allow-free-questions` 后还会将本地 CTC 转写交给电脑端有限关系模板与证据检索。该实现不等于真实儿童跨说话人准确率，Hi3516 问答延迟和动态答案播放仍待实测。
 
 默认服务监听板端的 `127.0.0.1:8765`。开发镜像开启 SSH 时，可从 PC 执行 `ssh -N -L 8765:127.0.0.1:8765 user@板端IP`，再按上文使用 `hdc rport` 连接手机。
 

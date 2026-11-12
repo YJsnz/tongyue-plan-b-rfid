@@ -252,6 +252,10 @@ class StoryPack:
         if not self.has_text_index:
             return {"status": "unsupported"}
         from free_question import extractive_answer
+        from semantic_qa import has_semantic_intent, semantic_answer
+        semantic = semantic_answer(self.segments, segment_id, question)
+        if semantic.get("status") == "answered" or has_semantic_intent(question):
+            return semantic
         return extractive_answer(self.text_index(), segment_id, question)
 
 

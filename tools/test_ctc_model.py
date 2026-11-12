@@ -201,12 +201,12 @@ class RealCtcModelTests(unittest.TestCase):
             reader.tap("0004A12B")
             result = reader.ask_recording("question-free.wav")
             self.assertEqual(result["status"], "answered")
-            self.assertEqual(result["answerMode"], "extractive")
+            self.assertEqual(result["answerMode"], "semantic-template")
             self.assertEqual(result["evidence"], "小熊带着一把伞出门，因为天要下雨了。")
             reader.remember_answer(result, "voice")
             self.assertEqual(reader.ask_recording("question-unknown.wav")["status"], "unsupported")
             session = reader.finish(None)
-            self.assertEqual(session["answers"][0]["question"], "原文检索提问")
+            self.assertEqual(session["answers"][0]["question"], "书内关系问答")
             self.assertNotIn("小熊出门的时候带了什么东西", session["answers"][0]["question"])
 
 

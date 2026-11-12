@@ -66,6 +66,25 @@ TONGYUE_CTC_MODEL=output/ctc-zh-pinned TONGYUE_CTC_DEMO=output/rfid-demo-g2-ten 
 
 `bench_ctc_pc.py` 可生成模型版本、转写、词位日志、加载耗时与推理 RTF 报告；该诊断报告包含所选录音的转写，仅适用于明确选定的本地验证材料。
 
-电脑模拟器可显式启用实验性自由问句：先用本模型贪心转写，再在当前段以及同一章节、同一故事的前后相邻段做保守词面检索，并逐字摘录原文。答案会标明摘录来自当前段还是相邻段；候选证据并列或匹配不足时拒答。它不生成答案、不支持口语同义推理，答案也没有合成语音。实际板端尚未启用这条路径。
+## PC 离线语义问答与语音合成
+
+`semantic_qa.py` 在已校验的 StoryPack 当前段和同章节、同故事的前后相邻段中识别有限关系：随身物品、动作原因、施事/接收者、颜色和地点。问句动作同义表达会归一到同一关系；答案由关系槽位模板组织，并返回原文句子、句段编号及 Unicode code point 半开区间 `[start, end)`。两个不同原文跨度都能回答时拒答。未识别的关系问句仍拒答；其它开放式问句可回退到既有保守摘录检索。
+
+这是确定性规则和模板，不是本地大语言模型，不支持开放域常识推理。关系范围和措辞都受演示语料限制；真实儿童问题集、覆盖率、准确率及安全评估仍待做。语音提问可沿用本地 CTC 转写，但语义问答不会保存临时转写或原始录音。
+
+Windows PC 使用系统已安装的 `zh-CN` System.Speech 音色，离线合成动态回答为单声道 16 kHz PCM16 WAV；生成后验证格式与非静音。以下命令会新建演示包并合成、播放答案：
+
+```powershell
+py -X utf8 -B tools/make_demo_storypack.py output/rfid-semantic-qa-demo
+py -X utf8 -B tools/demo_question.py `
+  --packs output/rfid-semantic-qa-demo/packs `
+  --book-id bear-friends --segment-id s1 `
+  --question "小熊出门时随身携带的是什么？" `
+  --play --audio-dir output/local-qa-audio
+```
+
+PC 模拟器可通过 `--allow-free-questions --local-tts-dir output/local-qa-audio` 开启自由问答和动态 WAV 生成；`/sim/ask` 返回的 `synthesizedAudio` 是电脑本地文件路径。该文件不进入 StoryPack 哈希清单或阅读摘要。该接口仍是电脑测试工具，不是板端扬声器播放集成。
+
+实际板端仍默认运行受限 FAQ 和预录音回答。板端采音/转写、任意关系问句、动态语音合成/播放及回答延迟验收尚未完成。
 
 后续仍需开发增量书内 DP/Beam，用至少 5 类真实音频异常和授权儿童样本验证准确率。当前模型的内存、速度及依赖尚未在 Hi3516 上验证。若要达到可面向儿童使用的自由提问，还需具备稳定的口语问句识别、书内语义证据召回、证据约束回答与不确定时拒答、离线语音播报，以及真实环境准确率和延迟验收。

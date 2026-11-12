@@ -41,7 +41,7 @@ class StateWriteError(OSError):
 
 class Reader:
     def __init__(self, state_path, scan_timeout, packs=None, locator=None, recordings=None, *, device_prefix="sim",
-                 trusted_clock=True, ctc_acoustic=None, allow_free_questions=False):
+                 trusted_clock=True, ctc_acoustic=None, allow_free_questions=False, local_tts_dir=None):
         self.state_path = state_path
         self.scan_timeout = scan_timeout
         self.packs = packs
@@ -50,6 +50,7 @@ class Reader:
         self.trusted_clock = trusted_clock
         self.ctc_acoustic = ctc_acoustic
         self.allow_free_questions = allow_free_questions
+        self.local_tts_dir = local_tts_dir
         self.import_lock = threading.Lock()
         self.storage_needs_restart = False
         self.scan = None
@@ -491,10 +492,21 @@ class Reader:
         try:
             result = pack.answer(self.active["segmentId"], question)
             if result.get("status") == "unsupported" and self.allow_free_questions:
-                return pack.answer_free(self.active["segmentId"], question)
+                return self.synthesize_free_answer(pack.answer_free(self.active["segmentId"], question))
             return result
         except (ValueError, sqlite3.Error) as error:
             raise ApiError(409, "PACK_INVALID") from error
+
+    def synthesize_free_answer(self, result):
+        if result.get("status") != "answered" or self.local_tts_dir is None:
+            return result
+        try:
+            from local_tts import synthesize
+            speech = synthesize(result["answer"], self.local_tts_dir)
+        except (OSError, RuntimeError, ValueError, KeyError) as error:
+            raise ApiError(503, "LOCAL_TTS_UNAVAILABLE") from error
+        return {**result, "synthesizedAudio": speech["path"], "speechVoice": speech["voice"],
+                "speechDurationMs": speech["durationMs"]}
 
     def remember_answer(self, result, source):
         if self.active is None or result.get("status") != "answered":
@@ -636,11 +648,15 @@ if __name__ == "__main__":
     parser.add_argument("--locator", type=Path, help="Native locate_wav executable")
     parser.add_argument("--ctc-model", type=Path, help="Optional pinned PC CTC model for reading and question transcription")
     parser.add_argument("--allow-free-questions", action="store_true",
-                        help="PC-only: allow conservative text/CTC questions answered with an exact page excerpt")
+                        help="PC-only: allow source-grounded semantic relation questions and excerpt fallback")
+    parser.add_argument("--local-tts-dir", type=Path,
+                        help="PC-only: synthesize free answers with Windows offline Chinese speech")
     parser.add_argument("--recordings", type=Path, help="Directory of local WAV files for simulated read-aloud input")
     args = parser.parse_args()
     if args.scan_timeout < 1:
         parser.error("--scan-timeout must be positive")
+    if args.local_tts_dir and not args.allow_free_questions:
+        parser.error("--local-tts-dir requires --allow-free-questions")
     if (args.locator or args.ctc_model or args.recordings) and not ((args.locator or args.ctc_model) and args.recordings and args.packs):
         parser.error("--recordings, --packs and --locator or --ctc-model are required for audio location")
     if args.locator and (not args.locator.is_file() or not args.recordings.is_dir()):
@@ -656,7 +672,8 @@ if __name__ == "__main__":
         server.reader = Reader(args.state, args.scan_timeout, args.packs,
                                args.locator.resolve() if args.locator else None,
                                args.recordings.resolve() if args.recordings else None, ctc_acoustic=acoustic,
-                               allow_free_questions=args.allow_free_questions)
+                               allow_free_questions=args.allow_free_questions,
+                               local_tts_dir=args.local_tts_dir.resolve() if args.local_tts_dir else None)
         print(f"RFID simulator: http://127.0.0.1:{server.server_port}", flush=True)
         try:
             server.serve_forever()

@@ -67,6 +67,26 @@ class SimulatorAppLinkTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_pairing_scan_can_start_a_book_and_return_its_reading_state(self):
+        packs = Path(__file__).resolve().parent.parent / "output" / "rfid-semantic-qa-demo" / "packs"
+        if not packs.is_dir():
+            self.skipTest("build output/rfid-semantic-qa-demo StoryPack first")
+        reader = Reader(self.root / "scan-reader-state.json", 10, packs=packs)
+        target = type("Target", (), {"path": "/v1/scans", "query": ""})()
+        scan = reader.dispatch("POST", target, {})
+
+        self.assertEqual(reader.tap("0004A12B")["status"], "scanned")
+        target.path = "/v1/scans/" + scan["scanId"]
+        detected = reader.dispatch("GET", target, {})
+        self.assertEqual(detected, {"status": "detected", "tagUid": "0004A12B"})
+
+        reader.bind("0004A12B", {"scanId": scan["scanId"], "bookId": "bear-friends"})
+        self.assertEqual(reader.tap("0004A12B")["status"], "started")
+        state = reader.reading_state()
+        self.assertTrue(state["active"])
+        self.assertEqual(state["bookId"], "bear-friends")
+        self.assertEqual(state["bookTitle"], "小熊找朋友")
+
     def test_reading_state_and_segment_navigation_return_current_text(self):
         state = self.reader.dispatch("GET", type("Target", (), {"path": "/sim/reading", "query": ""})(), {})
         self.assertEqual(state["bookTitle"], "小熊找朋友")

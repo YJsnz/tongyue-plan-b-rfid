@@ -11,6 +11,7 @@ export struct RfidReaderPanel {
   onCacheChanged: (cache: ReaderCache) => void = (_: ReaderCache): void => {};
   onExperienceBack: () => void = (): void => {};
   onOpenDevice: () => void = (): void => {};
+  onReadingStarted: (reading: ReaderReadingState) => void = (_: ReaderReadingState): void => {};
   @Prop managePacks: boolean = false;
   @Prop readingExperience: boolean = false;
   @Prop experienceTitle: string = '小小探险家';
@@ -155,14 +156,19 @@ export struct RfidReaderPanel {
 
   private async scan(): Promise<void> {
     const reader = this.reader;
-    if (!reader || this.busy) { return; }
+    const selectedBook = this.books[this.book];
+    if (!reader || !selectedBook || this.busy) { return; }
     this.busy = true;
     this.tag = '';
     this.scanId = '';
-    this.message = '请将绘本标签贴近阅读器';
+    this.message = this.simulatorAvailable ? '正在读取本地演示标签…' : '请将绘本标签贴近阅读器';
     try {
       const id = await reader.startScan();
       this.scanId = id;
+      if (this.simulatorAvailable) {
+        const status = await reader.simulateTap(this.simTagUid);
+        if (status !== 'scanned') { throw new Error('本地模拟标签未进入扫描状态，请重试'); }
+      }
       const deadline = Date.now() + 35000;
       while (this.visible && Date.now() < deadline) {
         const result = await reader.checkScan(id);
@@ -171,6 +177,21 @@ export struct RfidReaderPanel {
           this.scanId = id;
           this.tag = result.tagUid;
           this.simTagUid = result.tagUid;
+          if (this.simulatorAvailable) {
+            await reader.bind(result.tagUid, id, selectedBook.bookId);
+            this.tag = '';
+            this.scanId = '';
+            const status = await reader.simulateTap(result.tagUid);
+            if (status !== 'started' && status !== 'alreadyReading') {
+              throw new Error('已读到标签，但无法启动对应绘本');
+            }
+            const currentReading = await reader.readingState();
+            if (!currentReading.active) { throw new Error('阅读器没有返回活动绘本，请重试'); }
+            this.reading = currentReading;
+            this.message = '已识别绘本，正在打开阅读页面';
+            this.onReadingStarted(currentReading);
+            return;
+          }
           this.message = '已读到标签，请确认要绑定的绘本';
           return;
         }
@@ -205,26 +226,6 @@ export struct RfidReaderPanel {
     }
   }
 
-  private async simulateScanTap(): Promise<void> {
-    const reader = this.reader;
-    const uid = this.simTagUid.trim().toUpperCase();
-    if (!reader || !this.simulatorAvailable || !this.scanId || this.simTapBusy ||
-      !/^[0-9A-F]{4,32}$/.test(uid)) { return; }
-    this.simTapBusy = true;
-    try {
-      const status = await reader.simulateTap(uid);
-      if (this.visible) {
-        this.simTagUid = uid;
-        this.message = status === 'scanned' ? '已向电脑模拟器呈送标签，正在读取扫描结果…' :
-          '电脑模拟器返回：' + status;
-      }
-    } catch (error) {
-      if (this.visible) { this.message = (error as Error).message || '模拟贴卡失败'; }
-    } finally {
-      if (this.visible) { this.simTapBusy = false; }
-    }
-  }
-
   private async simulateReadingTap(): Promise<void> {
     const reader = this.reader;
     const uid = this.simTagUid.trim().toUpperCase();
@@ -241,7 +242,7 @@ export struct RfidReaderPanel {
         this.message = this.reading.active ? '已连接到《' + (this.reading.bookTitle ?? '') + '》的当前阅读' :
           '模拟标签已呈送，但当前没有活动阅读';
       } else if (status === 'unbound') {
-        this.message = '这个 UID 尚未绑定绘本。先扫描绘本标签，再点击“模拟贴入标签”并完成绑定。';
+        this.message = '这个 UID 尚未绑定绘本。请先到设备中心扫描并绑定绘本标签。';
       } else {
         this.message = '标签已被当前配对扫描接收，请先完成扫描和绑定';
       }
@@ -726,31 +727,6 @@ export struct RfidReaderPanel {
           }
         } else {
           Text('阅读器还没有可配对的绘本').fontFamily(FONT_BODY).fontColor('#53665E');
-        }
-        if (this.simulatorAvailable) {
-          Column({ space: 9 }) {
-            Text('电脑阅读联动演示').fontFamily(FONT_STRONG).fontSize(17).fontColor('#152044');
-            Text('此操作只向本机 PC 模拟器发送测试标签，不代表真实 RFID 读卡。')
-              .fontFamily(FONT_BODY).fontSize(12).fontColor('#53665E');
-            TextInput({ placeholder: '测试标签 UID，例如 0004A12B', text: this.simTagUid })
-              .fontFamily(FONT_BODY).maxLength(32).enabled(!this.simTapBusy)
-              .onChange((value: string) => { this.simTagUid = value.toUpperCase(); });
-            if (this.scanId && !this.tag) {
-              Button(this.simTapBusy ? '正在模拟贴卡…' : '模拟贴入标签以完成扫描')
-                .fontFamily(FONT_STRONG).width('100%').backgroundColor('#E8F6EC').fontColor('#188C4A')
-                .enabled(!this.simTapBusy && /^[0-9A-F]{4,32}$/.test(this.simTagUid.trim()))
-                .onClick(() => { this.simulateScanTap(); });
-            }
-            if (this.reading.active) {
-              this.ReadingControls();
-            } else {
-              Button(this.simTapBusy ? '正在启动阅读…' : '模拟贴卡并开始阅读')
-                .fontFamily(FONT_STRONG).width('100%').backgroundColor('#188C4A')
-                .enabled(!this.busy && !this.simTapBusy && !this.scanId &&
-                  /^[0-9A-F]{4,32}$/.test(this.simTagUid.trim()))
-                .onClick(() => { this.simulateReadingTap(); });
-            }
-          }.width('100%').alignItems(HorizontalAlign.Start).padding(12).backgroundColor('#EAF4EC').borderRadius(14);
         }
         Button('同步阅读记录').fontFamily(FONT_STRONG).width('100%')
           .enabled(!this.busy).backgroundColor('#188C4A').onClick(() => { this.sync(); });

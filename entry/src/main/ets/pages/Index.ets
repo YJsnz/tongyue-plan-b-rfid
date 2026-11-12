@@ -4,7 +4,7 @@ import { ReadingRadar } from '../components/ReadingRadar';
 import { RfidReaderPanel } from '../components/RfidReaderPanel';
 import { LengthMetrics } from '@kit.ArkUI';
 import { FONT_BODY, FONT_STRONG, FONT_TITLE } from '../theme/Typography';
-import { emptyReaderCache, readReaderCache, ReaderCache } from '../services/RfidReader';
+import { emptyReaderCache, readReaderCache, ReaderCache, ReaderReadingState } from '../services/RfidReader';
 import { formatReadingDuration, ReadingSummary, ReadingWeek, summarizeReading } from '../services/ReadingStats';
 
 const INK: string = '#152044';
@@ -21,6 +21,9 @@ struct Index {
   @State selected: number = 0;
   @State page: number = 8;
   @State readingSummary: ReadingSummary = summarizeReading(emptyReaderCache(), Date.now());
+  @State readerExperienceTitle: string = '';
+  @State readerExperienceCover: number = 0;
+  @State readerReturnView: string = '';
   @State filter: string = '推荐';
   @State query: string = '';
   @State question: string = '为什么天空是蓝色的？';
@@ -131,6 +134,22 @@ struct Index {
       this.view = view;
       this.pageScroller.scrollTo({ xOffset: 0, yOffset: 0 });
     });
+  }
+
+  private openActiveReaderExperience(reading: ReaderReadingState): void {
+    if (!reading.active) { return; }
+    this.readerExperienceTitle = reading.bookTitle ?? '亲子共读';
+    this.readerExperienceCover = reading.bookId === 'forest-seed' ? 2 : 0;
+    this.readerReturnView = 'pair';
+    this.setView('read');
+  }
+
+  private closeReaderExperience(): void {
+    const target = this.readerReturnView;
+    this.readerReturnView = '';
+    this.readerExperienceTitle = '';
+    this.readerExperienceCover = 0;
+    this.setView(target);
   }
 
   private pageColor(): string {
@@ -843,8 +862,10 @@ struct Index {
           onExperienceBack: () => { this.setView(''); }, onOpenDevice: () => { this.setView('pair'); },
           onCacheChanged: (cache: ReaderCache) => { this.updateReadingSummary(cache); } });
       } else if (this.view === 'read') {
-        RfidReaderPanel({ readingExperience: true, experienceTitle: this.titles[this.selected], experienceCover: this.selected,
-          onExperienceBack: () => { this.setView(''); }, onOpenDevice: () => { this.setView('pair'); },
+        RfidReaderPanel({ readingExperience: true,
+          experienceTitle: this.readerExperienceTitle || this.titles[this.selected],
+          experienceCover: this.readerExperienceTitle ? this.readerExperienceCover : this.selected,
+          onExperienceBack: () => { this.closeReaderExperience(); }, onOpenDevice: () => { this.setView('pair'); },
           onCacheChanged: (cache: ReaderCache) => { this.updateReadingSummary(cache); } });
       } else if (this.view === 'finish') {
         Column({ space: 12 }) {
@@ -859,7 +880,8 @@ struct Index {
           this.Action('回到故事岛', LIME, 'back');
         }.padding(18).width('100%').backgroundColor('#FFF8E2').borderRadius(24);
       } else if (this.view === 'pair') {
-        RfidReaderPanel({ onCacheChanged: (cache: ReaderCache) => { this.updateReadingSummary(cache); } });
+        RfidReaderPanel({ onReadingStarted: (reading: ReaderReadingState) => { this.openActiveReaderExperience(reading); },
+          onCacheChanged: (cache: ReaderCache) => { this.updateReadingSummary(cache); } });
       } else if (this.view === 'profile') {
         Text('谁来打开今天的故事？').fontSize(25).fontFamily(FONT_BODY).fontWeight(FontWeight.Bold).fontFamily(FONT_STRONG).fontColor(INK).width('100%');
         ForEach(['小雨', '小星'], (name: string, i: number) => {

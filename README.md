@@ -65,7 +65,7 @@
 - [x] Linux 用户态阅读器候选实现 PN532 HSU、ALSA 录放音、实体按键、StoryPack 装载、阅读会话和本地历史；电脑虚拟板测试覆盖 UART、按键、录放音替身、TLS、重启、离线同步和 UART 故障恢复。
 - [x] 阅读器离线保存设备标识、标签绑定、阅读摘要和同步游标；恢复联网后通过增量接口同步。
 - [x] 家长端与 PC 阅读器模拟器连接、扫描、绑定、阅读记录和问答证据同步，已在 HarmonyOS 模拟器走过软件闭环。
-- [x] 实现 HarmonyOS App 电脑演示操控：设备中心可模拟刷标签开始阅读、显示当前 StoryPack 段落、前后切段和结束会话；扫描时可用模拟 UID 完成标签绑定。验证：`hvigorw assembleHap` 成功；HarmonyOS 模拟器连接 PC 模拟器并显示活动绘本/段落正文。完整操作顺序仍由下一项验收。
+- [x] 实现 HarmonyOS App 电脑演示操控：设备中心扫描绘本标签后，本地 PC 模拟器通过预设 UID 完成读取/绑定并进入当前绘本阅读页；设备页不再显示“电脑阅读联动演示”操作卡。阅读页支持当前 StoryPack 段落、前后切段、音频、问答和结束会话。验证：2026-11-12 `assembleHap` 成功，`test_rfid_simulator_app_link.py` 5/5 通过。
 - [x] 实现 HarmonyOS App 正文音频与问答联动：在当前段播放 StoryPack WAV，提交自由文字问题、显示证据约束回答并播放服务端 WAV；结束后自动同步记录。验证：HAP 编译通过；PC 状态/音频路由 4 项单测通过，语义问答 6 项回归通过。App 内实际音频和问答点击仍由下一项验收。
 - [ ] 在 HarmonyOS 模拟器连接本地 PC 服务完成“模拟绑定/刷卡 → 阅读/切段 → 播放正文 → 问答/播报 → 结束/同步/查看证据”验收；记录构建、设备和操作证据，不作为真实 RFID/板卡/扬声器验收。
 - [ ] 确认实际 Hi3516 板卡型号、系统镜像/内核、CPU 架构、设备树、音频驱动和部署方式。
@@ -196,8 +196,9 @@ PC 默认提供方仅实现有限关系识别与模板回答，不是大语言�
 以下记录包含 2026-11-11 的基线和 2026-11-12 的阅读联动开发检查；每次相关代码开发后应重新运行受影响检查，并更新本节及任务证据。
 
 - 2026-11-12 App 绘本体验页：按参考图新增封面/书名/简介/共读按钮、右上角正文播放和提问入口，并复用 PC 阅读器联动控制与历史同步；DevEco Hvigor `assembleHap` 成功，PC 音频/阅读 API 单测 4/4 通过。本轮未安装新 HAP 或操作模拟器，因此页面目视与 App 点击全流程仍待验收。
+- 2026-11-12 设备页读卡跳转：移除“电脑阅读联动演示”卡片；PC 模拟器环境点击扫描后用预设 UID 读取/绑定并自动进入阅读页。`test_rfid_simulator_app_link.py` 5/5、Python 工具全量 107 项通过且 18 项按平台/可选资源跳过；`assembleHap` 成功。App 点击流和真实 RFID 仍待设备验收。
 - 2026-11-12 Qt 本地调试台：独立 PySide6 6.12 venv 离屏启动通过；`test_qt_debug_station.py` 2/2 通过，覆盖服务启停、模拟绑定/刷卡、切段、问答、正文/答案 WAV 获取、结束后刷新历史、连接错误、非法 StoryPack 目录，以及不将模拟错误正文中的授权密钥写入 UI。测试服务及状态文件在临时目录；离屏测试不证明声卡实际播放。
-- 2026-11-12 问答提供方：完整 Python 工具套件 `py -X utf8 -B -m unittest discover -s tools -p "test_*.py"` 106 项通过、18 项因平台/可选资源跳过；其中 `test_qa_providers.py` 9/9、`test_qt_debug_station.py` 2/2。DeepSeek 只做 HTTP mock 验证，未配置 API Key，未进行真实联网请求。
+- 2026-11-12 问答提供方及读卡跳转回归：完整 Python 工具套件 `py -X utf8 -B -m unittest discover -s tools -p "test_*.py"` 107 项通过、18 项因平台/可选资源跳过；其中 `test_qa_providers.py` 9/9、`test_qt_debug_station.py` 2/2、`test_rfid_simulator_app_link.py` 5/5。DeepSeek 只做 HTTP mock 验证，未配置 API Key，未进行真实联网请求。
 - 2026-11-12 App 阅读联动：DevEco Hvigor `assembleHap` 成功；HarmonyOS 7 API 26 模拟器已显示电脑模拟器绘本和阅读段落。App 内翻段、正文播放、云问答/答案播报、结束与历史证据查看的完整 E2E 仍待本机模拟器验收；当前 HAP 未安装本轮最新问答错误提示与超时变更。MediaKit 编译有设备能力提示，当前只针对 API 26 模拟器继续验收；无签名配置。
 - 2026-11-12 PC 阅读 API：新增 `GET /sim/reading` 返回活动会话、当前原文和段落 ID；音频路由只允许活动 StoryPack 清单内的正文/FAQ WAV，或当前会话生成的 UUID WAV。4 项单测覆盖状态切换、内容和路径校验、合成回答 WAV、HTTP `audio/wav` 响应。
 

@@ -2,6 +2,8 @@
 
 基准：`03_product_plans/TongYue_Plan_B_Hi3516_RFID_ReadingTracker_Complete.pdf`，V1.0，2026-10-29，附录 B-T01 至 B-T06。电脑通过的检查只证明对应的软件范围，不能代替真实儿童样本和 Hi3516 外设、性能验收。
 
+2026-11-25 采购规划：用户选择保留 Hi3516，将大模型放在云端，使用小型扬声器。型号、数量、采购链接、预算与接线见 [硬件采购与连接清单](PLAN_B_HARDWARE.md)（B-HW01）；主板/外设实际版本、报价、驱动及实物 G0—G5 仍待 B-HW02 验证。云端方案按 B-CLOUD01 跟踪，ASR/TTS 单独选型；本次文档整理没有增加板端已实现能力，原有离线 FAQ 与 OpenHarmony 小型系统适配验收继续保留。
+
 | 任务 | 当前实现与证据 | 未完成内容 |
 | --- | --- | --- |
 | B-T01 StoryPack 编译器 | 新包生成 `segments.bin`、`phoneme_lexicon.bin`、`policy.json`、FAQ、声明与 SHA-256。支持作者词界、章节/故事、拼音候选和原文偏移。`test_text_index.py` 覆盖 100 条不同 FAQ 的原文追溯及跨段拒答。 | 作者需复核读音和版权声明；声明校验不等于已证明授权。PDF/OCR 自动内容编排尚未提供。 |
